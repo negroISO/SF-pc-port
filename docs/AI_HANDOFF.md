@@ -17,6 +17,8 @@ commit `a11020bbf8ea136e1685edfe29217e7c965b49c9`.
 - Unsigned iPhone application and arm64 Simulator application build.
 - UIKit scene lifecycle launches in an iPhone 17 Pro Simulator and visibly
   reports one linked supported build.
+- A user-owned Apple Development signature installs and launches the bootstrap
+  over Wi-Fi on an iPhone 17 Pro Max running iOS 27.0.
 - Renderer, game execution, disc import, audio and input are not connected.
 - Legal local BIN/CUE staging directory: ignored `tmp/discs/sf1/`.
 
@@ -41,22 +43,28 @@ lifecycle. Evidence is under
 `ios-simulator-runtime-smoke-scene-fix.log` and
 `ios-simulator-bootstrap-landscape.jpg`.
 
+Physical-device evidence is under
+`tmp/validation/2026-08-15-iphone17promax-device/`. The signed arm64 app was
+verified with `codesign`, installed with `devicectl`, remained alive through a
+sustained process check, produced no matching device crash report, and was
+visually inspected in `iphone17promax-bootstrap.png`.
+
 ## Known issues
 
 - AppleClang warnings remain in upstream code; bring-up presets currently set
   `SF_WARNINGS_AS_ERRORS=OFF`.
-- Physical-device signing is not configured.
+- Signing remains disabled by default in the checked-in preset. A separate
+  external build tree was successfully signed with the user's development team.
 - PsyCross currently selects desktop OpenGL for `__APPLE__`; iPhone needs the
   GLES3 path or a native Metal backend.
 - SDL2, OpenAL Soft and FFmpeg iOS dependency builds are not configured.
 
 ## Next steps
 
-1. Configure user-owned signing and run the bootstrap on a physical iPhone.
-2. Package SDL2, OpenAL Soft and FFmpeg entirely under the external volume.
-3. Patch PsyCross for `TARGET_OS_IPHONE` GLES3 and bring up a controller-only
+1. Package SDL2, OpenAL Soft and FFmpeg entirely under the external volume.
+2. Patch PsyCross for `TARGET_OS_IPHONE` GLES3 and bring up a controller-only
    known scene.
-4. Add CUE+BIN document import and Application Support storage.
+3. Add CUE+BIN document import and Application Support storage.
 
 ## Git policy
 
