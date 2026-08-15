@@ -27,6 +27,48 @@
         "VCPKG_TARGET_TRIPLET": "x64-windows",
         "SF_ENABLE_PSYCROSS": "ON"
       }
+    },
+    {
+      "name": "ios-base",
+      "hidden": true,
+      "generator": "Xcode",
+      "cacheVariables": {
+        "CMAKE_SYSTEM_NAME": "iOS",
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "17.0",
+        "SF_BUILD_TESTS": "OFF",
+        "SF_BUILD_ROM_PROBES": "OFF",
+        "SF_ENABLE_PSYCROSS": "OFF",
+        "SF_BUILD_IOS_SHELL": "ON",
+        "SF_IOS_CODE_SIGNING": "OFF",
+        "SF_ENABLE_RELEASE_IPO": "OFF",
+        "SF_WARNINGS_AS_ERRORS": "OFF",
+        "CMAKE_XCODE_ATTRIBUTE_CACHE_ROOT": "${sourceDir}/out/xcode-cache",
+        "CMAKE_XCODE_ATTRIBUTE_CLANG_MODULE_CACHE_PATH": "${sourceDir}/out/xcode-cache/ModuleCache.noindex",
+        "CMAKE_XCODE_ATTRIBUTE_CLANG_MODULES_BUILD_SESSION_FILE": "${sourceDir}/out/xcode-cache/ModuleCache.noindex/Session.modulevalidation",
+        "CMAKE_XCODE_ATTRIBUTE_COMPILATION_CACHE_CAS_PATH": "${sourceDir}/out/xcode-cache/CompilationCache.noindex",
+        "CMAKE_XCODE_ATTRIBUTE_COMPILER_INDEX_STORE_ENABLE": "NO",
+        "CMAKE_XCODE_ATTRIBUTE_DSTROOT": "${sourceDir}/out/xcode-dst",
+        "CMAKE_XCODE_ATTRIBUTE_SDK_STAT_CACHE_ENABLE": "NO"
+      }
+    },
+    {
+      "name": "ios-device",
+      "displayName": "iOS device arm64 / bootstrap shell",
+      "inherits": "ios-base",
+      "binaryDir": "${sourceDir}/out/ios-device",
+      "cacheVariables": {
+        "CMAKE_OSX_SYSROOT": "iphoneos"
+      }
+    },
+    {
+      "name": "ios-simulator",
+      "displayName": "iOS Simulator arm64 / bootstrap shell",
+      "inherits": "ios-base",
+      "binaryDir": "${sourceDir}/out/ios-simulator",
+      "cacheVariables": {
+        "CMAKE_OSX_SYSROOT": "iphonesimulator"
+      }
     }
   ],
   "buildPresets": [
@@ -58,6 +100,39 @@
       "configurePreset": "windows-psycross",
       "configuration": "Release",
       "targets": ["syphon_filter"]
+    },
+    {
+      "name": "ios-device-core-release",
+      "displayName": "iOS device Release / core game only",
+      "configurePreset": "ios-device",
+      "configuration": "Release",
+      "targets": ["sf_game"],
+      "nativeToolOptions": [
+        "CLANG_MODULES_BUILD_SESSION_FILE=${sourceDir}/out/xcode-cache/ModuleCache.noindex/Session.modulevalidation",
+        "SDK_STAT_CACHE_ENABLE=NO"
+      ]
+    },
+    {
+      "name": "ios-device-shell-release",
+      "displayName": "iOS device Release / unsigned bootstrap shell",
+      "configurePreset": "ios-device",
+      "configuration": "Release",
+      "targets": ["sf_ios"],
+      "nativeToolOptions": [
+        "CLANG_MODULES_BUILD_SESSION_FILE=${sourceDir}/out/xcode-cache/ModuleCache.noindex/Session.modulevalidation",
+        "SDK_STAT_CACHE_ENABLE=NO"
+      ]
+    },
+    {
+      "name": "ios-simulator-shell-debug",
+      "displayName": "iOS Simulator Debug / bootstrap shell",
+      "configurePreset": "ios-simulator",
+      "configuration": "Debug",
+      "targets": ["sf_ios"],
+      "nativeToolOptions": [
+        "CLANG_MODULES_BUILD_SESSION_FILE=${sourceDir}/out/xcode-cache/ModuleCache.noindex/Session.modulevalidation",
+        "SDK_STAT_CACHE_ENABLE=NO"
+      ]
     }
   ],
   "testPresets": [

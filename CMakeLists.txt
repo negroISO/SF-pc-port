@@ -13,6 +13,10 @@ option(SF_ENABLE_PSYCROSS "Build the optional PsyCross platform backend" OFF)
 option(SF_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" ON)
 option(SF_PARALLEL_COMPILE "Compile independent sources in parallel" ON)
 option(SF_ENABLE_RELEASE_IPO "Enable interprocedural optimization in Release builds" ON)
+option(SF_BUILD_IOS_SHELL "Build the native iOS bootstrap application" OFF)
+option(SF_IOS_CODE_SIGNING "Enable code signing for the iOS bootstrap application" OFF)
+set(SF_IOS_BUNDLE_IDENTIFIER "com.syphonfilter.port" CACHE STRING
+    "Bundle identifier for the iOS bootstrap application")
 
 if(SF_ENABLE_RELEASE_IPO)
     include(CheckIPOSupported)
@@ -148,6 +152,14 @@ if(MSVC)
     target_compile_options(sf_game PRIVATE /utf-8)
 endif()
 sf_set_project_warnings(sf_game)
+
+if(SF_BUILD_IOS_SHELL)
+    if(NOT IOS)
+        message(FATAL_ERROR "SF_BUILD_IOS_SHELL requires an iOS toolchain")
+    endif()
+    enable_language(OBJCXX)
+    add_subdirectory(apps/sf_ios)
+endif()
 
 add_executable(sf_tool
     apps/sf_tool/main.cpp

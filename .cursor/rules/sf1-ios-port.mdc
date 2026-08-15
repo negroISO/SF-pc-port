@@ -1,0 +1,7 @@
+---
+description: Mandatory SF1 iOS port workflow and validation rules
+alwaysApply: true
+---
+
+Read and follow `AGENTS.md` before any project action. It is canonical. Read
+`docs/AI_HANDOFF.md` before editing and update it after meaningful milestones.

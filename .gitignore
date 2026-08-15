@@ -21,3 +21,4 @@
 *.py[cod]
 __pycache__/
 /tools/fonts/industry/*.ttf
+.DS_Store
