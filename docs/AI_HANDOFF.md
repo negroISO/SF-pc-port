@@ -2,7 +2,7 @@
 
 ## Updated
 
-2026-08-16 10:23 CDT
+2026-08-16 11:20 CDT
 
 ## Workspace
 
@@ -20,15 +20,30 @@ verified presentation-clock fix committed as `900009c`; do not merge to
 
 ## Current status
 
-- At the user's request, the exact signed `sf_ios_guest_renderer_smoke` app was
-  reinstalled over the shared bundle and launched again on the unlocked iPhone
-  with the explicit safety argument. The fresh run passed at guest frame 29 /
-  sequence 31 with fade 32, 2,914 submitted primitives, complete FBO/readback,
-  clean GL errors and zero crash delta in 637.667 ms. The fresh screenshot was
-  visually inspected and shows the same recognizable Mission 1 interior with
-  pronounced striped/fragmented raster output. The guest app is intentionally
-  left installed, running and visible for user inspection; restoring the signed
-  bootstrap is the next device-state cleanup after the user is finished.
+- The physical guest renderer's dense striped/fragmented output is fixed. The
+  root cause was an LP64 host-word packing bug in
+  `src/platform/psycross_vram.cpp::packVramWords`: PsyCross `LoadImage` consumes
+  contiguous 16-bit VRAM words through a legacy `u_long*`, but Apple `u_long`
+  is 64-bit. The old helper populated only the low two 16-bit lanes of every
+  element, inserting two zero/transparent words after every valid pair. The
+  helper now fills every 16-bit lane in its aligned storage.
+- The new varied nonzero full-page VRAM upload/readback regression fails before
+  the fix with `Texture-page upload inserted host-word padding` and passes
+  after it. Native PsyCross CTest is 27/27 PASS; portable CTest is 24/24 PASS;
+  the arm64 Simulator Release and signed arm64 device Release guest apps build,
+  and strict/deep device signature verification passes.
+- The exact fixed signed build passed on the unlocked physical iPhone at guest
+  frame 29 / sequence 31 with fade 32, 2,914 submitted primitives, complete
+  FBO/readback, 388,800 opaque pixels, 209,910 nonuniform pixels, 367 RGB
+  buckets, clean GL errors, and zero crash delta in 609.739 ms. `fixed.png` was
+  visually inspected and shows a coherent, fully textured Mission 1 interior
+  without the dense stripes. The signed bootstrap was restored and visually
+  verified with the external disc still ready.
+- Temporary physical A/B variants ruled out PGXP conversion, primitive order,
+  vertex stride, clipping, UV interpolation, bilinear filtering, and dirty-row
+  GPU upload stride as the striped defect. Textureless geometry was coherent;
+  a procedural fragment UV probe was continuous across the complete room. All
+  diagnostic source edits were reverted before the narrow production fix.
 - Physical guest rendering now passes on the iPhone. The first resumed run
   exposed a real black-screen regression: guest frame 48 / sequence 50 was
   coherent, but composed map fade remained 240, so the strict gate returned
@@ -55,8 +70,7 @@ verified presentation-clock fix committed as `900009c`; do not merge to
   Simulator and device. Portable tests are 24/24 PASS and `git diff --check`
   passes. The final shared-ID Simulator Release app and signed device Release
   app build; code signature and full-screen plist checks pass. Runtime
-  physical framebuffer/readback/visual proof now passes with the visual-fidelity
-  limitation recorded below.
+  physical framebuffer/readback/visual proof now passes for one bounded frame.
 - The ROM-free renderer now uses `SDL_UIKitRunApp` and SDL's patched
   `SDLUIKitSceneDelegate`; the competing custom scene delegate, CADisplayLink,
   manifest, and temporary PsyCross late-attach bridge are removed. Exact-source
@@ -212,8 +226,23 @@ All evidence stays ignored on the external volume.
 - screenshot: recognizable Mission 1 interior with the same striped/fragmented
   fidelity limitation
 - post-run crash delta: zero
-- current device state: guest app installed/running for user inspection;
-  bootstrap restore pending
+- superseded by the fixed physical run below; the bootstrap is restored
+
+### Guest renderer — LP64 VRAM packing/raster fix
+
+- `tmp/validation/2026-08-16-pgxp-raster-investigation/README.md`
+- physical PGXP/filtering/full-upload/textureless/UV A/B isolation: PASS
+- exact pre-fix full-page VRAM regression reproduction: PASS
+- focused post-fix regression: PASS
+- native PsyCross build + CTest: 27/27 PASS
+- portable macOS build + CTest: 24/24 PASS
+- arm64 Simulator Release build: PASS
+- signed arm64 device Release build + strict/deep signature check: PASS
+- exact physical render/FBO/readback/pixel gate: PASS in 609.739 ms
+- fixed screenshot: coherent fully textured Mission 1 interior; dense stripes
+  absent
+- post-run crash delta: zero
+- final signed-bootstrap restore and visual check: PASS
 
 ## Not yet verified
 
@@ -226,8 +255,7 @@ All evidence stays ignored on the external volume.
   OpenGL ES/PsyCross as a bring-up bridge.
 - Physical-device runtime of the exact standalone SDL scene harness, iOS 17
   runtime, external displays, multiple/reconnected scenes, or cold URL delivery.
-- Visual correctness beyond one bounded guest frame. The passing physical
-  screenshot is recognizable but has pronounced striped/fragmented output.
+- Visual correctness beyond the one fixed bounded guest frame.
 
 ## Known limitations
 
@@ -242,19 +270,21 @@ All evidence stays ignored on the external volume.
   types; bring-up presets keep warnings-as-errors disabled.
 - Signing is disabled by default. Local automatic-signing settings live only in
   ignored build/evidence trees.
+- One rejected/offscreen bound in the renderer diagnostic still reports maximum
+  X as `INT_MAX`. It did not cause the texture stripes and needs separate
+  coordinate-stat diagnostics before treating that counter as authoritative.
 
 ## Next steps
 
-1. Investigate the pronounced striped/fragmented raster visible in the passing
-   physical screenshot before treating the OpenGL ES bridge as visually
-   correct or beginning continuous gameplay.
-2. Recopy the legal disc pair to Simulator Documents/Ps1 only if Simulator
+1. Add a lifecycle-owned continuous guest loop and validate frame pacing,
+   pause/background/resume, and repeated presentation on the physical iPhone.
+2. Route SDL game-controller input into the portable pad state, then physically
+   smoke Xbox/PlayStation/MFi USB-C and Bluetooth controllers.
+3. Recopy the legal disc pair to Simulator Documents/Ps1 only if Simulator
    retail parity is needed; the retained staging directory is currently empty.
-3. Profile continuous execution. Start with the R3000 interpreter step/pump hot
+4. Profile continuous execution. Start with the R3000 interpreter step/pump hot
    path identified by the physical CPU trace; optimize only against comparable
    traces and deterministic tests.
-4. Route SDL game-controller input into the portable pad state, then physically
-   smoke Xbox/PlayStation/MFi USB-C and Bluetooth controllers.
 5. Add OpenAL audio/XA and FFmpeg FMV smokes, then design the production Metal
    backend rather than treating OpenGL ES as the final renderer.
 

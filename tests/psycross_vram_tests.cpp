@@ -110,6 +110,27 @@ int main() {
     return 4;
   }
 
+  std::vector<std::byte> uploaded_page(texture_page_bytes);
+  std::vector<std::uint16_t> expected_page(texture_page_bytes / 2U);
+  for (std::size_t index = 0U; index < expected_page.size(); ++index) {
+    auto value = static_cast<std::uint16_t>(
+        (static_cast<std::uint32_t>(index) * 40503U) ^ 0xa55aU);
+    if (value == 0U) {
+      value = 1U;
+    }
+    expected_page[index] = value;
+    uploaded_page[index * 2U] = static_cast<std::byte>(value & 0xffU);
+    uploaded_page[index * 2U + 1U] =
+        static_cast<std::byte>(value >> 8U);
+  }
+  uploadTexturePageAt(6U, uploaded_page);
+  std::vector<std::uint16_t> uploaded_page_readback(expected_page.size());
+  readTexturePageAt(6U, uploaded_page_readback);
+  if (uploaded_page_readback != expected_page) {
+    std::cerr << "Texture-page upload inserted host-word padding\n";
+    return 15;
+  }
+
   std::vector<std::uint16_t> scrolling_page(64U * 256U);
   for (std::size_t index = 0U; index < scrolling_page.size(); ++index) {
     scrolling_page[index] = static_cast<std::uint16_t>(index & 0xffffU);

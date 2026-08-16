@@ -42,10 +42,17 @@ packVramWords(std::span<const std::byte> bytes) {
                       "VRAM payload has an odd byte count"};
   }
   const auto word_count = bytes.size() / 2U;
-  std::vector<u_long> result((word_count + 1U) / 2U);
+  // LoadImage's legacy signature is u_long*, but PsyCross consumes the
+  // payload as contiguous 16-bit VRAM words. u_long is 64-bit on Apple LP64,
+  // so packing only two words per element inserts two zero words after every
+  // pair and turns indexed textures into alternating transparent bands.
+  const auto storage_count =
+      (bytes.size() + sizeof(u_long) - 1U) / sizeof(u_long);
+  std::vector<u_long> result(storage_count);
+  auto *destination = reinterpret_cast<std::byte *>(result.data());
   for (std::size_t index = 0; index < word_count; ++index) {
     const auto value = readLe16(bytes, index * 2U);
-    result[index / 2U] |= static_cast<u_long>(value) << ((index & 1U) * 16U);
+    std::memcpy(destination + index * sizeof(value), &value, sizeof(value));
   }
   return result;
 }
