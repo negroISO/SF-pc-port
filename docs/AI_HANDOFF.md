@@ -2,7 +2,7 @@
 
 ## Updated
 
-2026-08-16 00:00 CDT
+2026-08-16 10:08 CDT
 
 ## Workspace
 
@@ -13,19 +13,41 @@ derived retail data, device/signing identifiers, credentials, or anything under
 `out/`/`tmp/`.
 
 The SDL-owned renderer milestone is committed and pushed as `c292495`. The
-full guest-renderer checkpoint is committed and pushed as `f348406`, remains
-isolated on the feature branch, and must not merge to `ios-port` until its
-physical-device runtime smoke passes.
+full guest-renderer checkpoint is committed and pushed as `f348406` and remains
+isolated on the feature branch. Its physical-device gate now passes after the
+verified presentation-clock fix described below; do not merge to `ios-port`
+without an explicit review/merge decision.
 
 ## Current status
 
+- Physical guest rendering now passes on the iPhone. The first resumed run
+  exposed a real black-screen regression: guest frame 48 / sequence 50 was
+  coherent, but composed map fade remained 240, so the strict gate returned
+  `visibility_timeout` before renderer submission. `GameplaySession::update()`
+  now advances its native presentation clock once per authoritative 20 Hz
+  update. The exact rebuilt run passed at guest frame 29 / sequence 31 with fade
+  32, 2,914 submitted primitives, complete draw/read FBO 2, 388,800 readable
+  opaque pixels, 194,058 nonuniform pixels, 807 RGB buckets, clean GL errors,
+  and coherent/visible/observer flags all set. Total time was 806.376 ms.
+- `guest-run2-pass.png` was visually inspected: it contains a recognizable
+  rendered Mission 1 scene rather than the pre-fix black screen. Pronounced
+  striped/fragmented raster output remains visible, so this checkpoint proves
+  bounded production-path submission/readback/presentation, not final visual
+  fidelity. The guest added no crash report. The signed bootstrap was restored
+  again with same-ID container access preserved and was visually verified with
+  the external disc ready.
+- The clock fix passes macOS build/CTest 24/24, arm64 Simulator Release and
+  signed arm64 device Release guest builds, `git diff --check`, and strict/deep
+  signature verification. Evidence is under
+  `tmp/validation/2026-08-16-ios-guest-renderer-smoke-resume/`.
 - Active continuation is isolated on `ios-guest-renderer-smoke`. The full iOS
   backend split, exact FFmpeg/OpenAL/SDL/OpenGLES closure, bounded guest target,
   and one-presentation production scene bridge build and link for arm64
   Simulator and device. Portable tests are 24/24 PASS and `git diff --check`
   passes. The final shared-ID Simulator Release app and signed device Release
   app build; code signature and full-screen plist checks pass. Runtime
-  framebuffer/visual proof is still pending.
+  physical framebuffer/readback/visual proof now passes with the visual-fidelity
+  limitation recorded below.
 - The ROM-free renderer now uses `SDL_UIKitRunApp` and SDL's patched
   `SDLUIKitSceneDelegate`; the competing custom scene delegate, CADisplayLink,
   manifest, and temporary PsyCross late-attach bridge are removed. Exact-source
@@ -67,7 +89,7 @@ physical-device runtime smoke passes.
   previously passed on Simulator and physical iPhone. The bootstrap/guest smoke
   now has a feature-branch bounded bridge that connects one coherent visible
   guest presentation to the production renderer and captures pre-present
-  FBO/pixel evidence; it has not yet run.
+  FBO/pixel evidence; the physical run now passes.
 - Simulator preflight found no installed `com.syphonfilter.port` app or reusable
   data container on any available Simulator. The arm64 bootstrap restore app is
   available at `out/ios-simulator/apps/sf_ios/Debug-iphonesimulator/`.
@@ -88,11 +110,9 @@ physical-device runtime smoke passes.
 - Enabling the C language before IPO when `SF_ENABLE_PSYCROSS=ON` fixes native
   PsyCross generation. Fresh native macOS configure and clean backend build
   pass without the temporary language adapter.
-- The exact signed guest app installed over the physical-phone bootstrap, but
-  SpringBoard denied launch because the device was locked; no guest code or
-  retail access ran. The signed bootstrap was immediately reinstalled and app
-  container access reverified. Launch/screenshot verification remains pending
-  an unlocked phone.
+- The earlier locked-device launch was superseded by the successful unlocked,
+  wired physical run. The bootstrap is again the installed and visually
+  verified app.
 - The native GameController diagnostic bridge recognizes the intended extended
   MFi-compatible Xbox/DualShock/DualSense mapping. Final gameplay input must be
   owned by SDL2; no real physical controller has been tested yet.
@@ -159,9 +179,23 @@ All evidence stays ignored on the external volume.
 - physical install: PASS; launch/render: BLOCKED — DEVICE LOCKED
 - physical signed bootstrap reinstall + container access: PASS
 
+### Guest renderer — resumed physical device
+
+- `tmp/validation/2026-08-16-ios-guest-renderer-smoke-resume/`
+- pre-fix black-screen `visibility_timeout` reproduced: PASS
+- presentation-clock source fix: PASS
+- macOS build + CTest: 24/24 PASS
+- arm64 Simulator Release build: PASS
+- signed arm64 device Release build + strict/deep signature check: PASS
+- exact physical render/FBO/readback/pixel gate: PASS in 806.376 ms
+- screenshot: visible Mission 1 scene; striped/fragmented fidelity limitation
+  recorded
+- post-run crash delta: zero
+- final signed-bootstrap restore, container access and visual check: PASS
+
 ## Not yet verified
 
-- Continuous gameplay, guest-driven drawing, frame pacing, touch controls, saves,
+- Continuous guest-driven drawing, frame pacing, touch controls, saves,
   pause/resume during active gameplay, or mission progression.
 - Real USB-C/Bluetooth Xbox, DualShock 4, DualSense, or other MFi controller
   through SDL2's final gameplay path.
@@ -170,9 +204,8 @@ All evidence stays ignored on the external volume.
   OpenGL ES/PsyCross as a bring-up bridge.
 - Physical-device runtime of the exact standalone SDL scene harness, iOS 17
   runtime, external displays, multiple/reconnected scenes, or cold URL delivery.
-- Physical-device guest rendering/FBO readback for this feature checkpoint. The
-  only launch attempt was rejected by SpringBoard before app code ran because
-  the phone was locked.
+- Visual correctness beyond one bounded guest frame. The passing physical
+  screenshot is recognizable but has pronounced striped/fragmented output.
 
 ## Known limitations
 
@@ -190,10 +223,9 @@ All evidence stays ignored on the external volume.
 
 ## Next steps
 
-1. Unlock the connected phone, reinstall the signed guest over the restored
-   bootstrap, run `--sf-run-guest-render-smoke`, capture its timing/FBO/pixel
-   log and screenshot, query crash deltas, then reinstall and visually verify
-   the bootstrap again.
+1. Investigate the pronounced striped/fragmented raster visible in the passing
+   physical screenshot before treating the OpenGL ES bridge as visually
+   correct or beginning continuous gameplay.
 2. Recopy the legal disc pair to Simulator Documents/Ps1 only if Simulator
    retail parity is needed; the retained staging directory is currently empty.
 3. Profile continuous execution. Start with the R3000 interpreter step/pump hot

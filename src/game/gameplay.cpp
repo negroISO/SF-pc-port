@@ -6329,6 +6329,10 @@ bool GameplaySession::npcZoneContains(const NpcState &state, double x,
 }
 
 void GameplaySession::update(const GameplayInput &input) {
+  // update() is the authoritative 20 Hz host clock. Advance the native
+  // presentation envelope even while the guest owns simulation; otherwise its
+  // first post-release map fade (240) permanently masks every guest frame.
+  advanceAnimationClock();
   refreshLegacyTargetFollowCameraState();
   refreshLegacyRadioConversationState();
   updateEffects();
