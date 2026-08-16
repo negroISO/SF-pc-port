@@ -2,7 +2,7 @@
 
 ## Updated
 
-2026-08-16 09:54 CDT
+2026-08-16 10:23 CDT
 
 ## Workspace
 
@@ -20,6 +20,15 @@ verified presentation-clock fix committed as `900009c`; do not merge to
 
 ## Current status
 
+- At the user's request, the exact signed `sf_ios_guest_renderer_smoke` app was
+  reinstalled over the shared bundle and launched again on the unlocked iPhone
+  with the explicit safety argument. The fresh run passed at guest frame 29 /
+  sequence 31 with fade 32, 2,914 submitted primitives, complete FBO/readback,
+  clean GL errors and zero crash delta in 637.667 ms. The fresh screenshot was
+  visually inspected and shows the same recognizable Mission 1 interior with
+  pronounced striped/fragmented raster output. The guest app is intentionally
+  left installed, running and visible for user inspection; restoring the signed
+  bootstrap is the next device-state cleanup after the user is finished.
 - Physical guest rendering now passes on the iPhone. The first resumed run
   exposed a real black-screen regression: guest frame 48 / sequence 50 was
   coherent, but composed map fade remained 240, so the strict gate returned
@@ -193,6 +202,18 @@ All evidence stays ignored on the external volume.
   recorded
 - post-run crash delta: zero
 - final signed-bootstrap restore, container access and visual check: PASS
+
+### Guest renderer — user-requested visible rerun
+
+- `tmp/validation/2026-08-16-guest-renderer-user-run/`
+- reused exact signed app from clean `87560cf`: PASS
+- shared container access and signature preflight: PASS
+- explicit physical bounded render: PASS in 637.667 ms
+- screenshot: recognizable Mission 1 interior with the same striped/fragmented
+  fidelity limitation
+- post-run crash delta: zero
+- current device state: guest app installed/running for user inspection;
+  bootstrap restore pending
 
 ## Not yet verified
 
