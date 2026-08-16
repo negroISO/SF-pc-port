@@ -2,7 +2,7 @@
 
 ## Updated
 
-2026-08-16 11:20 CDT
+2026-08-16 14:10 CDT
 
 ## Workspace
 
@@ -20,6 +20,28 @@ verified presentation-clock fix committed as `900009c`; do not merge to
 
 ## Current status
 
+- A continuous lifecycle-owned guest loop now drives the bounded renderer.
+  `runPsyCrossGuestLoopSmoke()` preloads the guest to the visibility
+  threshold and runs a new `SceneViewerRunOptions::continuous_guest_loop`
+  branch in `psycross_scene_runtime.inc`: wall-clock pacing of the
+  authoritative 20 Hz guest update with one production presentation per
+  completed update, a bounded presentation count, and a per-iteration host
+  run-loop yield so UIKit lifecycle transitions complete while the app
+  renders. SDL app events pause the loop on background and resume it on
+  foreground with the pacing clock reset (no catch-up burst).
+- Physical pacing smoke PASS: 200/200 presentations with sequences 31..230,
+  intervals 48.7-56.4 ms (mean 50.58 ms) against the 50 ms target, zero GL
+  errors, healthy final-frame pixel evidence. A 600-presentation run also
+  completed (`terminated=0`).
+- Physical background/resume smoke PASS: the operator switched away at
+  presentation 390 and returned after 18.76 s. The loop logged one background
+  and one foreground transition, paused cleanly, resumed without a catch-up
+  burst (1199 updates / 1200 presentations), and completed all 1200
+  presentations with zero GL errors and healthy pixel evidence. The GL
+  context survived suspension.
+- Zero `SFGuestRendererSmoke` crash reports after both runs; the signed
+  bootstrap is restored, launched, and the external disc remains ready.
+- Evidence: `tmp/validation/2026-08-16-continuous-guest-loop/README.md`.
 - The physical guest renderer's dense striped/fragmented output is fixed. The
   root cause was an LP64 host-word packing bug in
   `src/platform/psycross_vram.cpp::packVramWords`: PsyCross `LoadImage` consumes
@@ -246,8 +268,9 @@ All evidence stays ignored on the external volume.
 
 ## Not yet verified
 
-- Continuous guest-driven drawing, frame pacing, touch controls, saves,
-  pause/resume during active gameplay, or mission progression.
+- Touch controls, saves, mission progression, or pause/resume of the full
+  gameplay flow (the continuous guest loop itself is validated; it runs with
+  empty pad state).
 - Real USB-C/Bluetooth Xbox, DualShock 4, DualSense, or other MFi controller
   through SDL2's final gameplay path.
 - Audio, XA playback, FMV video, interruptions, route changes, or audible output.
@@ -255,14 +278,14 @@ All evidence stays ignored on the external volume.
   OpenGL ES/PsyCross as a bring-up bridge.
 - Physical-device runtime of the exact standalone SDL scene harness, iOS 17
   runtime, external displays, multiple/reconnected scenes, or cold URL delivery.
-- Visual correctness beyond the one fixed bounded guest frame.
+- Visual correctness beyond the fixed bounded guest frames captured so far.
 
 ## Known limitations
 
-- The earlier boot smoke advances one guest host update. This renderer smoke
-  permits at most 48 empty-pad updates to reach a visible coherent frame,
-  presents exactly once, and has no lifecycle-driven game loop. Neither is a
-  playable port.
+- The boot smoke advances one guest host update; the renderer smokes advance
+  with empty pad state up to a visibility threshold. The continuous guest
+  loop is bounded by a presentation count and does not sample input, audio,
+  movies or gameplay flow, so none of these are a playable port yet.
 - The tracked SDL patch targets a single fullscreen application scene. Custom
   `UIApplicationMain` hosts must use SDL's wrapper or forward/dedupe callbacks;
   external display and multi-scene routing remain unsupported.
@@ -276,16 +299,14 @@ All evidence stays ignored on the external volume.
 
 ## Next steps
 
-1. Add a lifecycle-owned continuous guest loop and validate frame pacing,
-   pause/background/resume, and repeated presentation on the physical iPhone.
-2. Route SDL game-controller input into the portable pad state, then physically
+1. Route SDL game-controller input into the portable pad state, then physically
    smoke Xbox/PlayStation/MFi USB-C and Bluetooth controllers.
-3. Recopy the legal disc pair to Simulator Documents/Ps1 only if Simulator
+2. Recopy the legal disc pair to Simulator Documents/Ps1 only if Simulator
    retail parity is needed; the retained staging directory is currently empty.
-4. Profile continuous execution. Start with the R3000 interpreter step/pump hot
+3. Profile continuous execution. Start with the R3000 interpreter step/pump hot
    path identified by the physical CPU trace; optimize only against comparable
    traces and deterministic tests.
-5. Add OpenAL audio/XA and FFmpeg FMV smokes, then design the production Metal
+4. Add OpenAL audio/XA and FFmpeg FMV smokes, then design the production Metal
    backend rather than treating OpenGL ES as the final renderer.
 
 ## Pushed milestones
@@ -302,3 +323,4 @@ All evidence stays ignored on the external volume.
 - `f348406` — bounded iOS guest renderer smoke checkpoint; physical runtime pending
 - `900009c` — advance gameplay presentation clock; physical guest render PASS
 - `519c9ce` — fix LP64 VRAM texture packing; clean physical raster PASS
+- `c5a5b5f` — record raster fix validation

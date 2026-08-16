@@ -22,6 +22,8 @@ SceneViewerResult PsyCrossSceneViewer::run(
   }
   auto &gameplay = *preloaded_gameplay;
   const auto bounded_presentation = options.present_preloaded_frame_once;
+  const auto continuous_guest_loop =
+      options.continuous_guest_loop.has_value();
   // The retail terminal transition can retire the live mission/inventory
   // tables on the same 20 Hz tick that requests EOL. Retain the newest valid
   // carry snapshot while those tables are still coherent so campaign flow
@@ -61,7 +63,7 @@ SceneViewerResult PsyCrossSceneViewer::run(
   std::unique_ptr<PsyCrossAudioOutput> gameplay_audio;
   std::unique_ptr<PsyCrossUiAudio> ui_audio;
   std::unique_ptr<PsyCrossMoviePlayer> movie_player;
-  if (!bounded_presentation) {
+  if (!bounded_presentation && !continuous_guest_loop) {
     apply_gameplay_modes();
     gameplay_audio = preloaded_audio ? std::move(preloaded_audio)
                                      : std::make_unique<PsyCrossAudioOutput>();
@@ -434,7 +436,8 @@ SceneViewerResult PsyCrossSceneViewer::run(
           "Cannot persist controller settings to launcher settings\n");
     }
   };
-  if (!bounded_presentation && !apply_pause_settings(pause_settings)) {
+  if (!bounded_presentation && !continuous_guest_loop &&
+      !apply_pause_settings(pause_settings)) {
     return SceneViewerResult{previous_buttons,
                              SceneExitReason::return_to_title};
   }
@@ -1170,6 +1173,201 @@ SceneViewerResult PsyCrossSceneViewer::run(
   };
   PsyX_Log_Info("Presentation uses configured VSYNC/frame limit; gameplay "
                 "remains deterministic at 20 Hz; SPU streams at 120 Hz\n");
+
+  if (continuous_guest_loop) {
+    // Bounded continuous lifecycle-owned guest loop. Wall time paces the
+    // authoritative 20 Hz guest update; one presentation per completed guest
+    // update. SDL app events pause/resume across UIKit lifecycle transitions
+    // and terminate the loop. No input sampling, audio, movies or cheat
+    // activation; the guest advances with empty pad state.
+    const auto &loop_options = *options.continuous_guest_loop;
+    const auto counter_seconds = [&](std::uint64_t counter_delta) {
+      return performance_frequency == 0U
+                 ? 0.0
+                 : static_cast<double>(counter_delta) /
+                       static_cast<double>(performance_frequency);
+    };
+    auto previous_loop_counter = SDL_GetPerformanceCounter();
+    auto presentation_start_counter = previous_loop_counter;
+    auto previous_presentation_counter = previous_loop_counter;
+    auto lifecycle_paused = false;
+    auto terminated = false;
+    auto loop_fault = false;
+    auto loop_presentation_invalid = false;
+    auto presentations_completed = 0U;
+    auto previous_consumed_sequence = std::uint64_t{};
+    PsyX_Log_Info("Continuous guest loop start: presentations=%u "
+                  "update_interval_ms=%.1f\n",
+                  loop_options.presentation_count,
+                  loop_options.update_interval_seconds * 1000.0);
+    const auto pump_lifecycle_events = [&] {
+      SDL_Event event{};
+      while (SDL_PollEvent(&event) != 0) {
+        switch (event.type) {
+        case SDL_APP_WILLENTERBACKGROUND:
+        case SDL_APP_DIDENTERBACKGROUND:
+          if (!lifecycle_paused) {
+            lifecycle_paused = true;
+            if (loop_options.lifecycle_event) {
+              loop_options.lifecycle_event(true, presentations_completed);
+            }
+          }
+          break;
+        case SDL_APP_WILLENTERFOREGROUND:
+        case SDL_APP_DIDENTERFOREGROUND:
+          if (lifecycle_paused) {
+            lifecycle_paused = false;
+            // Discard the suspended wall-time gap so resume pacing cannot
+            // produce a catch-up burst of guest updates.
+            previous_loop_counter = SDL_GetPerformanceCounter();
+            presentation_start_counter = previous_loop_counter;
+            previous_presentation_counter = previous_loop_counter;
+            if (loop_options.lifecycle_event) {
+              loop_options.lifecycle_event(false, presentations_completed);
+            }
+          }
+          break;
+        case SDL_QUIT:
+        case SDL_APP_TERMINATING:
+          terminated = true;
+          break;
+        default:
+          break;
+        }
+      }
+    };
+    while (presentations_completed < loop_options.presentation_count) {
+      if (loop_options.yield_to_host) {
+        loop_options.yield_to_host();
+      }
+      pump_lifecycle_events();
+      if (terminated) {
+        break;
+      }
+      if (lifecycle_paused) {
+        // No guest time and no GL work while backgrounded. The process is
+        // suspended by the OS shortly after the transition completes.
+        SDL_Delay(5U);
+        continue;
+      }
+      const auto current_loop_counter = SDL_GetPerformanceCounter();
+      const auto raw_elapsed_seconds =
+          counter_seconds(current_loop_counter - previous_loop_counter);
+      previous_loop_counter = current_loop_counter;
+      const auto elapsed_seconds =
+          std::clamp(raw_elapsed_seconds, 0.0, maximum_frame_time_seconds);
+      meter_elapsed_seconds = elapsed_seconds;
+      meter_simulation_updates = 0U;
+      simulation_accumulator_seconds = std::min(
+          simulation_accumulator_seconds + elapsed_seconds,
+          retail_simulation_step_seconds * maximum_backlog_updates);
+      auto updates_this_presentation = 0U;
+      while (updates_this_presentation < maximum_updates_per_presentation &&
+             simulation_accumulator_seconds + 1.0e-9 >=
+                 retail_simulation_step_seconds) {
+        std::swap(previous_render_presentation, current_render_presentation);
+        previous_weapon_switch_countdown = current_weapon_switch_countdown;
+        gameplay.update(game::GameplayInput{});
+        current_weapon_switch_countdown = gameplay.hud().weaponSwitchFrames();
+        weapon_presentation_edges.observe(
+            gameplay.legacyPresentationFrame());
+        muzzle_flash_edges.observe(gameplay.effects());
+        scrim_copy_edges.observe(gameplay.legacyPresentationFrame());
+        captureRenderPresentation(gameplay, current_render_presentation,
+                                  ++render_capture_serial);
+        dropped_item_presentation.reconcile(
+            current_render_presentation.guest_frame,
+            current_render_presentation.dropped_item_floor_owner_mask,
+            current_render_presentation.dropped_items);
+        ++updates_this_presentation;
+        simulation_accumulator_seconds = std::max(
+            0.0,
+            simulation_accumulator_seconds - retail_simulation_step_seconds);
+        meter_simulation_updates = updates_this_presentation;
+        if (gameplay.runtimeFaulted()) {
+          loop_fault = true;
+          break;
+        }
+      }
+      if (loop_fault) {
+        break;
+      }
+      const auto frame = gameplay.legacyPresentationFrame();
+      if (!frame ||
+          !game::legacyPresentationFrameConsumable(
+              *frame, previous_consumed_sequence)) {
+        loop_presentation_invalid = true;
+        break;
+      }
+      previous_consumed_sequence = frame->sequence;
+      const auto draw_start_counter = SDL_GetPerformanceCounter();
+      const auto stats = draw_gameplay_frame(updates_this_presentation);
+      if (updates_this_presentation != 0U) {
+        gameplay.advanceAnimationClock();
+      }
+      submitted_presentation_sequence = frame->sequence;
+      const auto draw_end_counter = SDL_GetPerformanceCounter();
+      const auto interval_seconds =
+          counter_seconds(draw_end_counter - previous_presentation_counter);
+      previous_presentation_counter = draw_end_counter;
+      auto keep_running = true;
+      if (loop_options.per_presentation) {
+        keep_running = loop_options.per_presentation(SceneLoopPresentation{
+            .presentation_index = presentations_completed + 1U,
+            .updates = updates_this_presentation,
+            .presentation_ms =
+                counter_seconds(draw_end_counter - draw_start_counter) *
+                1000.0,
+            .interval_ms = interval_seconds * 1000.0,
+            .submission =
+                SceneFrameSubmission{
+                    .sequence = frame->sequence,
+                    .guest_frame = frame->guest_frame,
+                    .submitted = stats.submitted,
+                    .rejected = stats.rejected,
+                    .minimum_depth = stats.minimum_depth,
+                    .maximum_depth = stats.maximum_depth,
+                    .minimum_x = stats.minimum_x,
+                    .maximum_x = stats.maximum_x,
+                    .minimum_y = stats.minimum_y,
+                    .maximum_y = stats.maximum_y,
+                },
+        });
+      }
+      end_presented_frame();
+      ++presentations_completed;
+      if (!keep_running) {
+        break;
+      }
+      // Pace to the configured presentation rate. The accumulator already
+      // absorbs drift; this only avoids a busy spin between updates.
+      const auto presentation_elapsed_seconds = counter_seconds(
+          SDL_GetPerformanceCounter() - presentation_start_counter);
+      const auto remaining_seconds =
+          loop_options.update_interval_seconds - presentation_elapsed_seconds;
+      if (remaining_seconds > 0.001) {
+        SDL_Delay(static_cast<std::uint32_t>(remaining_seconds * 1000.0));
+      }
+      presentation_start_counter = SDL_GetPerformanceCounter();
+    }
+    if (loop_fault) {
+      PsyX_Log_Error("Continuous guest loop runtime fault\n");
+      return SceneViewerResult{
+          previous_buttons, SceneExitReason::continuous_loop_guest_fault};
+    }
+    if (loop_presentation_invalid) {
+      PsyX_Log_Error("Continuous guest loop presentation invalid\n");
+      return SceneViewerResult{
+          previous_buttons,
+          SceneExitReason::continuous_loop_presentation_invalid};
+    }
+    PsyX_Log_Info("Continuous guest loop end: presentations=%u terminated=%d\n",
+                  presentations_completed, terminated ? 1 : 0);
+    return SceneViewerResult{previous_buttons,
+                             terminated
+                                 ? SceneExitReason::continuous_loop_terminated
+                                 : SceneExitReason::continuous_loop_complete};
+  }
 
   for (;;) {
     // Wall time drives the fixed 20 Hz guest frame and the independent 120 Hz

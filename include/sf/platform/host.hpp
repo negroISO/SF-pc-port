@@ -127,6 +127,114 @@ struct PsyCrossGuestFrameSmokeResult {
   }
 };
 
+enum class PsyCrossGuestLoopSmokeStatus : std::uint8_t {
+  success,
+  invalid_options,
+  wrong_thread,
+  missing_graphics_context,
+  initial_presentation_invalid,
+  guest_runtime_fault,
+  presentation_invalid,
+  visibility_timeout,
+  renderer_rejected,
+  framebuffer_incomplete,
+  readback_failed,
+  pixel_evidence_rejected,
+  terminated_early,
+};
+
+struct PsyCrossGuestLoopFrame {
+  std::uint32_t presentation_index{};
+  std::uint32_t updates{};
+  std::uint64_t sequence{};
+  std::uint64_t guest_frame{};
+  std::size_t submitted{};
+  std::size_t rejected{};
+  double presentation_ms{};
+  double interval_ms{};
+};
+
+struct PsyCrossGuestLoopSmokeOptions {
+  // Twenty presentations per second of guest time. Six hundred presentations
+  // are thirty seconds of continuous paced execution, enough for the smoke to
+  // exit by itself while devicectl captures the console.
+  static constexpr std::uint32_t hard_maximum_presentations = 2400U;
+  static constexpr std::uint32_t default_presentation_count = 600U;
+  static constexpr double default_update_interval_seconds = 1.0 / 20.0;
+
+  std::uint32_t presentation_count{default_presentation_count};
+  double update_interval_seconds{default_update_interval_seconds};
+  // Maximum empty-pad guest updates before the first visible presentation.
+  std::uint32_t maximum_guest_updates{
+      PsyCrossGuestFrameSmokeOptions::hard_maximum_guest_updates};
+  std::uint8_t maximum_fade_intensity{32U};
+  // Called once per loop iteration on the main thread so the host can service
+  // its run loop. Required on iOS: UIKit cannot complete lifecycle
+  // transitions while this loop blocks the main thread.
+  std::function<void()> yield_to_host;
+  // Optional observer invoked after each completed presentation, before the
+  // present transaction, on the main thread.
+  std::function<void(const PsyCrossGuestLoopFrame &)> per_presentation;
+  // Optional observer for lifecycle transitions; `background` is true on
+  // enter-background and false on enter-foreground.
+  std::function<void(bool background, std::uint32_t presentation_index)>
+      lifecycle_event;
+};
+
+struct PsyCrossGuestLoopSmokeResult {
+  PsyCrossGuestLoopSmokeStatus status{
+      PsyCrossGuestLoopSmokeStatus::renderer_rejected};
+  std::uint32_t presentations_completed{};
+  std::uint32_t guest_updates_completed{};
+  std::uint64_t first_sequence{};
+  std::uint64_t last_sequence{};
+  std::uint64_t first_guest_frame{};
+  std::uint64_t last_guest_frame{};
+  std::size_t submitted_primitives{};
+  std::size_t rejected_primitives{};
+  double first_presentation_ms{};
+  double last_presentation_ms{};
+  double minimum_interval_ms{};
+  double maximum_interval_ms{};
+  double mean_interval_ms{};
+  std::uint32_t background_events{};
+  std::uint32_t foreground_events{};
+  std::uint32_t presentations_before_first_background{};
+  double total_background_ms{};
+  bool terminated_by_os{};
+  bool visibility_threshold_met{};
+  bool observer_called{};
+  std::uint32_t renderer_gl_error{};
+  std::uint32_t readback_gl_error{};
+  std::uint32_t present_gl_error{};
+  std::uint32_t draw_framebuffer{};
+  std::uint32_t read_framebuffer{};
+  std::uint32_t framebuffer_status{};
+  int viewport_x{};
+  int viewport_y{};
+  int viewport_width{};
+  int viewport_height{};
+  std::size_t pixel_count{};
+  std::size_t opaque_pixel_count{};
+  std::size_t nonuniform_pixel_count{};
+  std::uint32_t unique_rgb_buckets{};
+  std::uint8_t minimum_luminance{0xffU};
+  std::uint8_t maximum_luminance{};
+  std::array<std::uint8_t, 4U> lower_left_pixel{};
+  std::array<std::uint8_t, 4U> center_pixel{};
+  std::uint64_t pixel_hash{};
+  int minimum_depth{};
+  int maximum_depth{};
+  int minimum_x{};
+  int maximum_x{};
+  int minimum_y{};
+  int maximum_y{};
+
+  [[nodiscard]] bool passed() const noexcept {
+    return status == PsyCrossGuestLoopSmokeStatus::success;
+  }
+};
+
 class Host {
 public:
   virtual ~Host() = default;
@@ -167,5 +275,19 @@ createPsyCrossHost(std::string title, GraphicsSettings graphics = {});
 [[nodiscard]] PsyCrossGuestFrameSmokeResult renderPsyCrossGuestFrameSmoke(
     const game::MissionPackage &mission,
     PsyCrossGuestFrameSmokeOptions options = {});
+
+// Runs a bounded continuous lifecycle-owned guest loop through the production
+// PsyCross scene path. The caller owns SDL/PsyX initialization and must call on
+// the main thread with the desired GL context current. The prepared mission and
+// its authorized source must remain alive/accessible for the complete call.
+// The loop advances the guest with empty pad state at the authoritative 20 Hz
+// rate, presents once per completed guest update, pauses on SDL lifecycle
+// background events and resumes on foreground, and exits after
+// `presentation_count` presentations or an OS termination event. Every
+// iteration invokes `yield_to_host` so the host run loop stays responsive.
+// This path does not sample gameplay input or create audio/movie services.
+[[nodiscard]] PsyCrossGuestLoopSmokeResult runPsyCrossGuestLoopSmoke(
+    const game::MissionPackage &mission,
+    PsyCrossGuestLoopSmokeOptions options = {});
 
 } // namespace sf::platform

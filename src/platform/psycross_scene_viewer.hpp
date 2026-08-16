@@ -29,6 +29,10 @@ enum class SceneExitReason {
   mission_selected,
   bounded_presentation_complete,
   bounded_presentation_rejected,
+  continuous_loop_complete,
+  continuous_loop_terminated,
+  continuous_loop_guest_fault,
+  continuous_loop_presentation_invalid,
 };
 [[nodiscard]] InputPromptBindings
 titleControllerInputPromptBindings(int controller_family);
@@ -53,11 +57,36 @@ struct SceneFrameSubmission {
   int maximum_y{};
 };
 
+struct SceneLoopPresentation {
+  std::uint32_t presentation_index{};
+  std::uint32_t updates{};
+  double presentation_ms{};
+  double interval_ms{};
+  SceneFrameSubmission submission;
+};
+
+struct SceneViewerContinuousGuestLoopOptions {
+  std::uint32_t presentation_count{};
+  double update_interval_seconds{1.0 / 20.0};
+  // Called once per loop iteration on the caller's thread so the host can
+  // service its run loop; required for UIKit lifecycle transitions on iOS.
+  std::function<void()> yield_to_host;
+  // Called after each completed presentation before the present transaction.
+  // Return false to stop the loop early.
+  std::function<bool(const SceneLoopPresentation &)> per_presentation;
+  // Called on lifecycle transitions: `background` is true on enter-background
+  // and false on enter-foreground; the presentation index is the count of
+  // completed presentations when the transition was observed.
+  std::function<void(bool background, std::uint32_t presentation_index)>
+      lifecycle_event;
+};
+
 struct SceneViewerRunOptions {
   bool present_preloaded_frame_once{};
   std::uint64_t expected_sequence{};
   std::uint64_t expected_guest_frame{};
   std::function<void(const SceneFrameSubmission &)> before_end_scene;
+  std::optional<SceneViewerContinuousGuestLoopOptions> continuous_guest_loop;
 };
 
 // Uses the same retail INTRFACE font page and ACD primitive path as the

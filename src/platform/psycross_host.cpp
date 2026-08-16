@@ -28,6 +28,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <iostream>
 #include <limits>
@@ -87,9 +88,10 @@ struct ScopedGlReadbackState final {
   ~ScopedGlReadbackState() { restore(); }
 };
 
+template <typename SmokeEvidenceResult>
 void normalizeSubmissionEvidence(
     const detail::SceneFrameSubmission &submission,
-    PsyCrossGuestFrameSmokeResult &result) noexcept {
+    SmokeEvidenceResult &result) noexcept {
   result.submitted_primitives = submission.submitted;
   result.rejected_primitives = submission.rejected;
   if (submission.submitted == 0U) {
@@ -109,8 +111,9 @@ void normalizeSubmissionEvidence(
   result.maximum_y = submission.maximum_y;
 }
 
+template <typename SmokeEvidenceResult>
 void captureGuestFrameEvidence(const detail::SceneFrameSubmission &submission,
-                               PsyCrossGuestFrameSmokeResult &result) {
+                               SmokeEvidenceResult &result) {
   result.observer_called = true;
   normalizeSubmissionEvidence(submission, result);
   result.renderer_gl_error = drainFirstGlError();
@@ -1489,6 +1492,315 @@ PsyCrossGuestFrameSmokeResult renderPsyCrossGuestFrameSmoke(
   }
 
   result.status = PsyCrossGuestFrameSmokeStatus::success;
+  return result;
+}
+
+PsyCrossGuestLoopSmokeResult runPsyCrossGuestLoopSmoke(
+    const game::MissionPackage &mission,
+    PsyCrossGuestLoopSmokeOptions options) {
+  PsyCrossGuestLoopSmokeResult result;
+  if (options.presentation_count == 0U ||
+      options.presentation_count >
+          PsyCrossGuestLoopSmokeOptions::hard_maximum_presentations ||
+      options.update_interval_seconds < (1.0 / 60.0) ||
+      options.update_interval_seconds > 0.25 ||
+      options.maximum_guest_updates == 0U ||
+      options.maximum_guest_updates >
+          PsyCrossGuestFrameSmokeOptions::hard_maximum_guest_updates) {
+    result.status = PsyCrossGuestLoopSmokeStatus::invalid_options;
+    return result;
+  }
+#if defined(__APPLE__)
+  if (pthread_main_np() == 0) {
+    result.status = PsyCrossGuestLoopSmokeStatus::wrong_thread;
+    return result;
+  }
+#endif
+  if (SDL_GL_GetCurrentWindow() == nullptr ||
+      SDL_GL_GetCurrentContext() == nullptr) {
+    result.status = PsyCrossGuestLoopSmokeStatus::missing_graphics_context;
+    return result;
+  }
+
+  std::unique_ptr<game::GameplaySession> gameplay;
+  try {
+    gameplay = std::make_unique<game::GameplaySession>(mission);
+  } catch (...) {
+    result.status =
+        PsyCrossGuestLoopSmokeStatus::initial_presentation_invalid;
+    return result;
+  }
+
+  auto frame = gameplay->legacyPresentationFrame();
+  if (!frame || gameplay->runtimeFaulted() ||
+      !game::legacyPresentationFrameConsumable(*frame, 0U)) {
+    result.status = gameplay->runtimeFaulted()
+                        ? PsyCrossGuestLoopSmokeStatus::guest_runtime_fault
+                        : PsyCrossGuestLoopSmokeStatus::
+                              initial_presentation_invalid;
+    return result;
+  }
+
+  auto previous_sequence = frame->sequence;
+  for (auto update = std::uint32_t{1U};
+       update <= options.maximum_guest_updates; ++update) {
+    try {
+      gameplay->update(game::GameplayInput{});
+    } catch (...) {
+      result.status = PsyCrossGuestLoopSmokeStatus::guest_runtime_fault;
+      return result;
+    }
+    if (gameplay->runtimeFaulted()) {
+      result.status = PsyCrossGuestLoopSmokeStatus::guest_runtime_fault;
+      return result;
+    }
+    frame = gameplay->legacyPresentationFrame();
+    if (!frame ||
+        !game::legacyPresentationFrameConsumable(*frame, previous_sequence)) {
+      result.status = PsyCrossGuestLoopSmokeStatus::presentation_invalid;
+      return result;
+    }
+    previous_sequence = frame->sequence;
+    result.visibility_threshold_met =
+        gameplay->mapFade() <= options.maximum_fade_intensity &&
+        hasVisibleGuestSource(*gameplay, *frame);
+    if (result.visibility_threshold_met) {
+      break;
+    }
+  }
+  if (!result.visibility_threshold_met) {
+    result.status = PsyCrossGuestLoopSmokeStatus::visibility_timeout;
+    return result;
+  }
+
+  // Reset caller residue so the reported GL errors belong only to this loop.
+  static_cast<void>(drainFirstGlError());
+  detail::configurePsyCrossVideoMode(detail::gameplay_video_mode, true);
+
+  PADRAW pad{};
+  game::RetailCheatState cheats{};
+  detail::PsyCrossSceneViewer scene_viewer{
+      defaultKeyboardMouseBindings(), cheats,
+      game::CampaignDifficulty::original, {}, false, {}, false};
+  PsyCrossGuestFrameSmokeResult last_captured_evidence;
+  auto sequence_monotonic = true;
+  auto interval_sum_ms = 0.0;
+  auto interval_count = 0U;
+  auto previous_tracked_sequence = std::uint64_t{};
+  auto background_started = std::chrono::steady_clock::time_point{};
+  auto background_depth = 0U;
+  detail::SceneViewerResult viewer_result;
+  try {
+    viewer_result = scene_viewer.run(
+        mission, pad, 0xffffU, std::filesystem::path{},
+        mission.definition().index, std::move(gameplay), {},
+        detail::SceneViewerRunOptions{
+            .continuous_guest_loop =
+                detail::SceneViewerContinuousGuestLoopOptions{
+                    .presentation_count = options.presentation_count,
+                    .update_interval_seconds = options.update_interval_seconds,
+                    .yield_to_host = options.yield_to_host,
+                    .per_presentation =
+                        [&](const detail::SceneLoopPresentation &loop_frame) {
+                          ++result.presentations_completed;
+                          result.guest_updates_completed += loop_frame.updates;
+                          result.submitted_primitives +=
+                              loop_frame.submission.submitted;
+                          result.rejected_primitives +=
+                              loop_frame.submission.rejected;
+                          if (loop_frame.presentation_index == 1U) {
+                            result.first_sequence =
+                                loop_frame.submission.sequence;
+                            result.first_guest_frame =
+                                loop_frame.submission.guest_frame;
+                            result.first_presentation_ms =
+                                loop_frame.presentation_ms;
+                          }
+                          result.last_sequence = loop_frame.submission.sequence;
+                          result.last_guest_frame =
+                              loop_frame.submission.guest_frame;
+                          result.last_presentation_ms =
+                              loop_frame.presentation_ms;
+                          result.minimum_depth =
+                              loop_frame.submission.minimum_depth;
+                          result.maximum_depth =
+                              loop_frame.submission.maximum_depth;
+                          result.minimum_x = loop_frame.submission.minimum_x;
+                          result.maximum_x = loop_frame.submission.maximum_x;
+                          result.minimum_y = loop_frame.submission.minimum_y;
+                          result.maximum_y = loop_frame.submission.maximum_y;
+                          if (result.presentations_completed > 1U &&
+                              loop_frame.submission.sequence <=
+                                  previous_tracked_sequence) {
+                            sequence_monotonic = false;
+                          }
+                          previous_tracked_sequence =
+                              loop_frame.submission.sequence;
+                          // The first interval covers loop startup, so pacing
+                          // statistics start with the second presentation.
+                          if (loop_frame.presentation_index > 1U) {
+                            interval_sum_ms += loop_frame.interval_ms;
+                            if (interval_count == 0U) {
+                              result.minimum_interval_ms =
+                                  loop_frame.interval_ms;
+                              result.maximum_interval_ms =
+                                  loop_frame.interval_ms;
+                            } else {
+                              result.minimum_interval_ms =
+                                  std::min(result.minimum_interval_ms,
+                                           loop_frame.interval_ms);
+                              result.maximum_interval_ms =
+                                  std::max(result.maximum_interval_ms,
+                                           loop_frame.interval_ms);
+                            }
+                            ++interval_count;
+                          }
+                          const auto error = drainFirstGlError();
+                          if (result.renderer_gl_error == 0U) {
+                            result.renderer_gl_error = error;
+                          }
+                          // Full framebuffer/pixel evidence only on the first
+                          // and final presentations; the readback is too heavy
+                          // to run at the paced 20 Hz rate.
+                          if (loop_frame.presentation_index == 1U ||
+                              loop_frame.presentation_index ==
+                                  options.presentation_count) {
+                            captureGuestFrameEvidence(loop_frame.submission,
+                                                      last_captured_evidence);
+                          }
+                          if (options.per_presentation) {
+                            options.per_presentation(
+                                PsyCrossGuestLoopFrame{
+                                    .presentation_index =
+                                        loop_frame.presentation_index,
+                                    .updates = loop_frame.updates,
+                                    .sequence =
+                                        loop_frame.submission.sequence,
+                                    .guest_frame =
+                                        loop_frame.submission.guest_frame,
+                                    .submitted =
+                                        loop_frame.submission.submitted,
+                                    .rejected =
+                                        loop_frame.submission.rejected,
+                                    .presentation_ms =
+                                        loop_frame.presentation_ms,
+                                    .interval_ms = loop_frame.interval_ms,
+                                });
+                          }
+                          return true;
+                        },
+                    .lifecycle_event =
+                        [&](bool background, std::uint32_t index) {
+                          if (background) {
+                            ++result.background_events;
+                            if (result.background_events == 1U) {
+                              result.presentations_before_first_background =
+                                  index;
+                            }
+                            if (background_depth == 0U) {
+                              background_started =
+                                  std::chrono::steady_clock::now();
+                            }
+                            ++background_depth;
+                          } else {
+                            ++result.foreground_events;
+                            if (background_depth > 0U) {
+                              --background_depth;
+                              if (background_depth == 0U) {
+                                result.total_background_ms +=
+                                    std::chrono::duration<double,
+                                                           std::milli>(
+                                        std::chrono::steady_clock::now() -
+                                        background_started)
+                                        .count();
+                              }
+                            }
+                          }
+                          if (options.lifecycle_event) {
+                            options.lifecycle_event(background, index);
+                          }
+                        },
+                },
+        });
+  } catch (...) {
+    // Safe when no scene is active and necessary when drawing threw after
+    // DrawOTag opened a presentation.
+    PsyX_EndScene();
+    result.present_gl_error = drainFirstGlError();
+    result.status = PsyCrossGuestLoopSmokeStatus::renderer_rejected;
+    return result;
+  }
+  result.present_gl_error = drainFirstGlError();
+
+  switch (viewer_result.reason) {
+  case detail::SceneExitReason::continuous_loop_guest_fault:
+    result.status = PsyCrossGuestLoopSmokeStatus::guest_runtime_fault;
+    return result;
+  case detail::SceneExitReason::continuous_loop_presentation_invalid:
+    result.status = PsyCrossGuestLoopSmokeStatus::presentation_invalid;
+    return result;
+  case detail::SceneExitReason::continuous_loop_terminated:
+    result.terminated_by_os = true;
+    result.status = PsyCrossGuestLoopSmokeStatus::terminated_early;
+    return result;
+  default:
+    break;
+  }
+  if (viewer_result.reason !=
+          detail::SceneExitReason::continuous_loop_complete ||
+      result.presentations_completed != options.presentation_count ||
+      !sequence_monotonic) {
+    result.status = PsyCrossGuestLoopSmokeStatus::renderer_rejected;
+    return result;
+  }
+  result.mean_interval_ms =
+      interval_count == 0U ? 0.0 : interval_sum_ms / interval_count;
+  result.observer_called = last_captured_evidence.observer_called;
+  result.renderer_gl_error = std::max(result.renderer_gl_error,
+                                      last_captured_evidence.renderer_gl_error);
+  result.readback_gl_error = last_captured_evidence.readback_gl_error;
+  result.draw_framebuffer = last_captured_evidence.draw_framebuffer;
+  result.read_framebuffer = last_captured_evidence.read_framebuffer;
+  result.framebuffer_status = last_captured_evidence.framebuffer_status;
+  result.viewport_x = last_captured_evidence.viewport_x;
+  result.viewport_y = last_captured_evidence.viewport_y;
+  result.viewport_width = last_captured_evidence.viewport_width;
+  result.viewport_height = last_captured_evidence.viewport_height;
+  result.pixel_count = last_captured_evidence.pixel_count;
+  result.opaque_pixel_count = last_captured_evidence.opaque_pixel_count;
+  result.nonuniform_pixel_count = last_captured_evidence.nonuniform_pixel_count;
+  result.unique_rgb_buckets = last_captured_evidence.unique_rgb_buckets;
+  result.minimum_luminance = last_captured_evidence.minimum_luminance;
+  result.maximum_luminance = last_captured_evidence.maximum_luminance;
+  result.lower_left_pixel = last_captured_evidence.lower_left_pixel;
+  result.center_pixel = last_captured_evidence.center_pixel;
+  result.pixel_hash = last_captured_evidence.pixel_hash;
+
+  if (!result.observer_called) {
+    result.status = PsyCrossGuestLoopSmokeStatus::renderer_rejected;
+    return result;
+  }
+  if (result.framebuffer_status != GL_FRAMEBUFFER_COMPLETE) {
+    result.status = PsyCrossGuestLoopSmokeStatus::framebuffer_incomplete;
+    return result;
+  }
+  if (result.readback_gl_error != 0U || result.viewport_width <= 0 ||
+      result.viewport_height <= 0 || result.pixel_count == 0U) {
+    result.status = PsyCrossGuestLoopSmokeStatus::readback_failed;
+    return result;
+  }
+  if (result.renderer_gl_error != 0U || result.present_gl_error != 0U) {
+    result.status = PsyCrossGuestLoopSmokeStatus::renderer_rejected;
+    return result;
+  }
+  if (result.opaque_pixel_count == 0U ||
+      result.nonuniform_pixel_count == 0U || result.unique_rgb_buckets < 2U ||
+      result.maximum_luminance <= result.minimum_luminance) {
+    result.status = PsyCrossGuestLoopSmokeStatus::pixel_evidence_rejected;
+    return result;
+  }
+
+  result.status = PsyCrossGuestLoopSmokeStatus::success;
   return result;
 }
 

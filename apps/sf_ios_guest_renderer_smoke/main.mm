@@ -17,6 +17,7 @@
 #include <chrono>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <filesystem>
@@ -198,6 +199,40 @@ const char *StatusName(sf::platform::PsyCrossGuestFrameSmokeStatus status) {
   return "unknown";
 }
 
+const char *
+LoopStatusName(sf::platform::PsyCrossGuestLoopSmokeStatus status) {
+  using Status = sf::platform::PsyCrossGuestLoopSmokeStatus;
+  switch (status) {
+  case Status::success:
+    return "success";
+  case Status::invalid_options:
+    return "invalid_options";
+  case Status::wrong_thread:
+    return "wrong_thread";
+  case Status::missing_graphics_context:
+    return "missing_graphics_context";
+  case Status::initial_presentation_invalid:
+    return "initial_presentation_invalid";
+  case Status::guest_runtime_fault:
+    return "guest_runtime_fault";
+  case Status::presentation_invalid:
+    return "presentation_invalid";
+  case Status::visibility_timeout:
+    return "visibility_timeout";
+  case Status::renderer_rejected:
+    return "renderer_rejected";
+  case Status::framebuffer_incomplete:
+    return "framebuffer_incomplete";
+  case Status::readback_failed:
+    return "readback_failed";
+  case Status::pixel_evidence_rejected:
+    return "pixel_evidence_rejected";
+  case Status::terminated_early:
+    return "terminated_early";
+  }
+  return "unknown";
+}
+
 bool HasArgument(int argc, char *argv[], std::string_view expected) {
   for (int index = 1; index < argc; ++index) {
     if (argv[index] && expected == argv[index]) {
@@ -212,6 +247,25 @@ std::optional<std::filesystem::path> CueArgument(int argc, char *argv[]) {
     if (argv[index] && std::string_view{argv[index]} == "--sf-cue" &&
         argv[index + 1] && argv[index + 1][0] != '\0') {
       return std::filesystem::path{argv[index + 1]};
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<std::uint32_t>
+LoopPresentationCountArgument(int argc, char *argv[]) {
+  for (int index = 1; index + 1 < argc; ++index) {
+    if (argv[index] &&
+        std::string_view{argv[index]} == "--sf-loop-presentations" &&
+        argv[index + 1] && argv[index + 1][0] != '\0') {
+      char *end = nullptr;
+      const auto value = std::strtoul(argv[index + 1], &end, 10);
+      if (!end || *end != '\0' || value == 0U ||
+          value > sf::platform::PsyCrossGuestLoopSmokeOptions::
+                     hard_maximum_presentations) {
+        return std::nullopt;
+      }
+      return static_cast<std::uint32_t>(value);
     }
   }
   return std::nullopt;
@@ -326,7 +380,13 @@ bool InitialiseRenderer() {
   return drawableWidth > 0 && drawableHeight > 0;
 }
 
-bool RunCoordinatedSmoke(const DiscSource &source) {
+using MissionRenderStep =
+    std::function<bool(sf::game::MissionPackage &mission,
+                       const SmokeClock::time_point &renderStart,
+                       const SmokeClock::time_point &smokeStart)>;
+
+bool RunCoordinatedMission(const DiscSource &source, const char *stage_name,
+                           const MissionRenderStep &render_step) {
   if (![NSThread isMainThread]) {
     EvidenceLog("result=FAIL stage=coordination reason=wrong-thread");
     return false;
@@ -508,68 +568,14 @@ bool RunCoordinatedSmoke(const DiscSource &source) {
                                               ElapsedMilliseconds(smokeStart));
                                           return;
                                         }
-
-                                        const auto result = sf::platform::
-                                            renderPsyCrossGuestFrameSmoke(
-                                                *missionPointer);
-                                        EvidenceLog(
-                                          "result=%s status=%s "
-                                          "guest_updates=%u guest_frame=%llu "
-                                          "sequence=%llu fade=%u models=%zu "
-                                          "objects=%zu submitted=%zu "
-                                          "rejected=%zu depth=%d:%d "
-                                          "bounds=%d:%d,%d:%d fbo=%u "
-                                          "read_fbo=%u fbo_status=0x%04x "
-                                          "viewport=%d,%d,%dx%d pixels=%zu "
-                                          "opaque=%zu nonuniform=%zu "
-                                          "rgb_buckets=%u luminance=%u:%u "
-                                          "gl_errors=0x%04x,0x%04x,0x%04x "
-                                          "coherent=%d visible=%d observer=%d "
-                                          "render_ms=%.3f total_ms=%.3f",
-                                          result.passed() ? "PASS" : "FAIL",
-                                          StatusName(result.status),
-                                          result.guest_updates,
-                                          static_cast<unsigned long long>(
-                                              result.guest_frame),
-                                          static_cast<unsigned long long>(
-                                              result.presentation_sequence),
-                                          result.fade_intensity,
-                                          result.presentation_models,
-                                          result.active_objects,
-                                          result.submitted_primitives,
-                                          result.rejected_primitives,
-                                          result.minimum_depth,
-                                          result.maximum_depth,
-                                          result.minimum_x, result.maximum_x,
-                                          result.minimum_y, result.maximum_y,
-                                          result.draw_framebuffer,
-                                          result.read_framebuffer,
-                                          result.framebuffer_status,
-                                          result.viewport_x,
-                                          result.viewport_y,
-                                          result.viewport_width,
-                                          result.viewport_height,
-                                          result.pixel_count,
-                                          result.opaque_pixel_count,
-                                          result.nonuniform_pixel_count,
-                                          result.unique_rgb_buckets,
-                                          result.minimum_luminance,
-                                          result.maximum_luminance,
-                                          result.renderer_gl_error,
-                                          result.readback_gl_error,
-                                          result.present_gl_error,
-                                          result.coherent_presentation ? 1 : 0,
-                                          result.visibility_threshold_met ? 1
-                                                                          : 0,
-                                          result.observer_called ? 1 : 0,
-                                            ElapsedMilliseconds(renderStart),
-                                            ElapsedMilliseconds(smokeStart));
-                                        renderPassed = result.passed();
+                                        renderPassed = render_step(
+                                            *missionPointer, renderStart,
+                                            smokeStart);
                                       } catch (const std::exception &) {
                                         EvidenceLog(
-                                            "result=FAIL "
-                                            "stage=bounded-guest-renderer "
+                                            "result=FAIL stage=%s "
                                             "render_ms=%.3f total_ms=%.3f",
+                                            stage_name,
                                             ElapsedMilliseconds(renderStart),
                                             ElapsedMilliseconds(smokeStart));
                                       }
@@ -600,11 +606,162 @@ bool RunCoordinatedSmoke(const DiscSource &source) {
   return state->passed;
 }
 
+bool RunCoordinatedSmoke(const DiscSource &source) {
+  return RunCoordinatedMission(
+      source, "bounded-guest-renderer",
+      [](sf::game::MissionPackage &mission,
+         const SmokeClock::time_point &renderStart,
+         const SmokeClock::time_point &smokeStart) {
+        const auto result =
+            sf::platform::renderPsyCrossGuestFrameSmoke(mission);
+        EvidenceLog(
+          "result=%s status=%s "
+          "guest_updates=%u guest_frame=%llu "
+          "sequence=%llu fade=%u models=%zu "
+          "objects=%zu submitted=%zu "
+          "rejected=%zu depth=%d:%d "
+          "bounds=%d:%d,%d:%d fbo=%u "
+          "read_fbo=%u fbo_status=0x%04x "
+          "viewport=%d,%d,%dx%d pixels=%zu "
+          "opaque=%zu nonuniform=%zu "
+          "rgb_buckets=%u luminance=%u:%u "
+          "gl_errors=0x%04x,0x%04x,0x%04x "
+          "coherent=%d visible=%d observer=%d "
+          "render_ms=%.3f total_ms=%.3f",
+          result.passed() ? "PASS" : "FAIL",
+          StatusName(result.status),
+          result.guest_updates,
+          static_cast<unsigned long long>(result.guest_frame),
+          static_cast<unsigned long long>(result.presentation_sequence),
+          result.fade_intensity,
+          result.presentation_models,
+          result.active_objects,
+          result.submitted_primitives,
+          result.rejected_primitives,
+          result.minimum_depth,
+          result.maximum_depth,
+          result.minimum_x, result.maximum_x,
+          result.minimum_y, result.maximum_y,
+          result.draw_framebuffer,
+          result.read_framebuffer,
+          result.framebuffer_status,
+          result.viewport_x,
+          result.viewport_y,
+          result.viewport_width,
+          result.viewport_height,
+          result.pixel_count,
+          result.opaque_pixel_count,
+          result.nonuniform_pixel_count,
+          result.unique_rgb_buckets,
+          result.minimum_luminance,
+          result.maximum_luminance,
+          result.renderer_gl_error,
+          result.readback_gl_error,
+          result.present_gl_error,
+          result.coherent_presentation ? 1 : 0,
+          result.visibility_threshold_met ? 1 : 0,
+          result.observer_called ? 1 : 0,
+          ElapsedMilliseconds(renderStart),
+          ElapsedMilliseconds(smokeStart));
+        return result.passed();
+      });
+}
+
+bool RunCoordinatedLoopSmoke(const DiscSource &source,
+                             std::uint32_t presentation_count) {
+  return RunCoordinatedMission(
+      source, "continuous-guest-loop",
+      [presentation_count](sf::game::MissionPackage &mission,
+                           const SmokeClock::time_point &renderStart,
+                           const SmokeClock::time_point &smokeStart) {
+        sf::platform::PsyCrossGuestLoopSmokeOptions options;
+        options.presentation_count = presentation_count;
+        options.yield_to_host = [] {
+          @autoreleasepool {
+            [[NSRunLoop currentRunLoop]
+                runMode:NSDefaultRunLoopMode
+             beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.002]];
+          }
+        };
+        options.per_presentation =
+            [](const sf::platform::PsyCrossGuestLoopFrame &frame) {
+              EvidenceLog(
+                  "loop_frame index=%u updates=%u sequence=%llu "
+                  "guest_frame=%llu submitted=%zu rejected=%zu "
+                  "presentation_ms=%.3f interval_ms=%.3f",
+                  frame.presentation_index, frame.updates,
+                  static_cast<unsigned long long>(frame.sequence),
+                  static_cast<unsigned long long>(frame.guest_frame),
+                  frame.submitted, frame.rejected, frame.presentation_ms,
+                  frame.interval_ms);
+            };
+        options.lifecycle_event = [](bool background,
+                                     std::uint32_t presentation_index) {
+          EvidenceLog("lifecycle event=%s presentations=%u",
+                      background ? "background" : "foreground",
+                      presentation_index);
+        };
+        const auto result =
+            sf::platform::runPsyCrossGuestLoopSmoke(mission, options);
+        EvidenceLog(
+          "loop_result=%s status=%s presentations=%u guest_updates=%u "
+          "first=%llu:%llu last=%llu:%llu submitted=%zu rejected=%zu "
+          "first_ms=%.3f last_ms=%.3f interval_ms=%.3f:%.3f:%.3f "
+          "background=%u foreground=%u bg_after=%u background_ms=%.3f "
+          "terminated=%d fbo=%u read_fbo=%u fbo_status=0x%04x "
+          "viewport=%d,%d,%dx%d pixels=%zu opaque=%zu nonuniform=%zu "
+          "rgb_buckets=%u luminance=%u:%u gl_errors=0x%04x,0x%04x,0x%04x "
+          "render_ms=%.3f total_ms=%.3f",
+          result.passed() ? "PASS" : "FAIL",
+          LoopStatusName(result.status),
+          result.presentations_completed,
+          result.guest_updates_completed,
+          static_cast<unsigned long long>(result.first_sequence),
+          static_cast<unsigned long long>(result.first_guest_frame),
+          static_cast<unsigned long long>(result.last_sequence),
+          static_cast<unsigned long long>(result.last_guest_frame),
+          result.submitted_primitives,
+          result.rejected_primitives,
+          result.first_presentation_ms,
+          result.last_presentation_ms,
+          result.minimum_interval_ms,
+          result.maximum_interval_ms,
+          result.mean_interval_ms,
+          result.background_events,
+          result.foreground_events,
+          result.presentations_before_first_background,
+          result.total_background_ms,
+          result.terminated_by_os ? 1 : 0,
+          result.draw_framebuffer,
+          result.read_framebuffer,
+          result.framebuffer_status,
+          result.viewport_x,
+          result.viewport_y,
+          result.viewport_width,
+          result.viewport_height,
+          result.pixel_count,
+          result.opaque_pixel_count,
+          result.nonuniform_pixel_count,
+          result.unique_rgb_buckets,
+          result.minimum_luminance,
+          result.maximum_luminance,
+          result.renderer_gl_error,
+          result.readback_gl_error,
+          result.present_gl_error,
+          ElapsedMilliseconds(renderStart),
+          ElapsedMilliseconds(smokeStart));
+        return result.passed();
+      });
+}
+
 } // namespace
 
 int main(int argc, char *argv[]) {
   @autoreleasepool {
-    if (!HasArgument(argc, argv, "--sf-run-guest-render-smoke")) {
+    const auto run_loop_smoke =
+        HasArgument(argc, argv, "--sf-run-guest-loop-smoke");
+    if (!HasArgument(argc, argv, "--sf-run-guest-render-smoke") &&
+        !run_loop_smoke) {
       EvidenceLog("result=IDLE reason=explicit-launch-argument-required");
       return 0;
     }
@@ -613,7 +770,22 @@ int main(int argc, char *argv[]) {
     std::optional<DiscSource> source;
     try {
       source = ResolveDiscSource(argc, argv);
-      const bool passed = RunCoordinatedSmoke(*source);
+      std::optional<std::uint32_t> loop_presentations;
+      if (run_loop_smoke) {
+        loop_presentations = LoopPresentationCountArgument(argc, argv);
+        if (!loop_presentations) {
+          EvidenceLog("result=FAIL stage=loop-options "
+                      "reason=missing-or-invalid-presentation-count");
+          if (source->securityScoped) {
+            [source->directoryURL stopAccessingSecurityScopedResource];
+          }
+          return 2;
+        }
+      }
+      const bool passed = run_loop_smoke
+                              ? RunCoordinatedLoopSmoke(
+                                    *source, *loop_presentations)
+                              : RunCoordinatedSmoke(*source);
       if (source->securityScoped) {
         [source->directoryURL stopAccessingSecurityScopedResource];
       }
