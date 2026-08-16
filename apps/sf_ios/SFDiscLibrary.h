@@ -6,6 +6,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 typedef void (^SFDiscLibraryStatusHandler)(NSString *status,
                                            BOOL discPairReady);
+typedef void (^SFDiscLibraryBootSmokeCompletionHandler)(NSString *status,
+                                                        BOOL succeeded);
 
 // Owns the security-scoped directory lease for the selected external folder.
 // cueURL remains valid only while this object is alive and until another folder
@@ -19,6 +21,8 @@ typedef void (^SFDiscLibraryStatusHandler)(NSString *status,
 
 - (void)restoreSelectedFolder;
 - (void)presentFolderPickerFromViewController:(UIViewController *)viewController;
+- (void)runFirstMissionBootSmokeWithCompletion:
+    (SFDiscLibraryBootSmokeCompletionHandler)completion;
 
 @end
 

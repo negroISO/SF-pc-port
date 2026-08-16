@@ -10,8 +10,14 @@
 @property(nonatomic, strong) SFGameControllerBridge *controllerBridge;
 @property(nonatomic, strong) UILabel *controllerStatusLabel;
 @property(nonatomic, strong) UILabel *discStatusLabel;
+@property(nonatomic, strong) UILabel *bootStatusLabel;
 @property(nonatomic, strong) UIButton *discButton;
+@property(nonatomic, strong) UIButton *bootButton;
 @property(nonatomic, strong) UIScrollView *scrollView;
+@property(nonatomic) BOOL discReady;
+@property(nonatomic) BOOL bootSmokeRunning;
+@property(nonatomic) BOOL bootSmokeLaunchRequested;
+@property(nonatomic) BOOL bootSmokeLaunchConsumed;
 @end
 
 @implementation SFRootViewController
@@ -38,7 +44,9 @@
     runtimeStatusLabel.textAlignment = NSTextAlignmentCenter;
     runtimeStatusLabel.text =
         [NSString stringWithFormat:@"Portable runtime linked (%lu supported "
-                                    "build). Renderer is not connected yet.",
+                                    "build). External-disc guest boot smoke is "
+                                    "available; gameplay rendering is not "
+                                    "connected yet.",
                                    static_cast<unsigned long>(supportedGames.size())];
     runtimeStatusLabel.accessibilityIdentifier = @"sf-ios-bootstrap-status";
 
@@ -71,6 +79,30 @@
                         action:@selector(chooseDiscFolder:)
               forControlEvents:UIControlEventTouchUpInside];
 
+    self.bootStatusLabel = [[UILabel alloc] init];
+    self.bootStatusLabel.font =
+        [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote];
+    self.bootStatusLabel.adjustsFontForContentSizeCategory = YES;
+    self.bootStatusLabel.textColor = UIColor.secondaryLabelColor;
+    self.bootStatusLabel.numberOfLines = 0;
+    self.bootStatusLabel.textAlignment = NSTextAlignmentCenter;
+    self.bootStatusLabel.text =
+        @"Boot smoke: Choose a valid disc folder to enable the bounded "
+         "mission-1 guest check.";
+    self.bootStatusLabel.accessibilityIdentifier = @"sf-ios-boot-smoke-status";
+
+    self.bootButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    [self.bootButton setTitle:@"Run Mission 1 Boot Smoke"
+                     forState:UIControlStateNormal];
+    self.bootButton.titleLabel.font =
+        [UIFont preferredFontForTextStyle:UIFontTextStyleHeadline];
+    self.bootButton.titleLabel.adjustsFontForContentSizeCategory = YES;
+    self.bootButton.enabled = NO;
+    self.bootButton.accessibilityIdentifier = @"sf-ios-run-boot-smoke";
+    [self.bootButton addTarget:self
+                        action:@selector(runBootSmoke:)
+              forControlEvents:UIControlEventTouchUpInside];
+
     UILabel *persistenceLabel = [[UILabel alloc] init];
     persistenceLabel.font =
         [UIFont preferredFontForTextStyle:UIFontTextStyleCaption1];
@@ -88,6 +120,8 @@
         self.controllerStatusLabel,
         self.discStatusLabel,
         self.discButton,
+        self.bootStatusLabel,
+        self.bootButton,
         persistenceLabel,
     ]];
     stack.translatesAutoresizingMaskIntoConstraints = NO;
@@ -150,15 +184,35 @@
     ]];
 
     self.discLibrary = [[SFDiscLibrary alloc] init];
+    // Explicit launch-only automation for an operator-authorized device smoke.
+    // Normal launches never read retail media, and this is not wired to CTest.
+    self.bootSmokeLaunchRequested = [NSProcessInfo.processInfo.arguments
+        containsObject:@"--sf-run-boot-smoke"];
     __weak SFRootViewController *weakSelf = self;
     self.discLibrary.statusHandler = ^(NSString *status, BOOL ready) {
         SFRootViewController *strongSelf = weakSelf;
+        strongSelf.discReady = ready;
         strongSelf.discStatusLabel.text = status;
         strongSelf.discStatusLabel.textColor =
             ready ? UIColor.systemGreenColor : UIColor.secondaryLabelColor;
         [strongSelf.discButton
             setTitle:(ready ? @"Change Disc Folder" : @"Choose Disc Folder")
             forState:UIControlStateNormal];
+        strongSelf.bootButton.enabled = ready && !strongSelf.bootSmokeRunning;
+        if (!ready && !strongSelf.bootSmokeRunning) {
+            strongSelf.bootStatusLabel.textColor = UIColor.secondaryLabelColor;
+            strongSelf.bootStatusLabel.text =
+                @"Boot smoke: Waiting for a ready disc folder. Run the smoke "
+                 "again after any disc selection change.";
+        }
+        if (ready && strongSelf.bootSmokeLaunchRequested &&
+            !strongSelf.bootSmokeLaunchConsumed) {
+            strongSelf.bootSmokeLaunchConsumed = YES;
+            NSLog(@"SF_GAME_BOOT_SMOKE launch_trigger=argument");
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [strongSelf runBootSmoke:strongSelf.bootButton];
+            });
+        }
     };
     [self.discLibrary restoreSelectedFolder];
 
@@ -170,6 +224,34 @@
             ready ? UIColor.systemGreenColor : UIColor.secondaryLabelColor;
     };
     [self.controllerBridge startMonitoring];
+}
+
+- (void)runBootSmoke:(UIButton *)sender {
+    (void)sender;
+    if (self.bootSmokeRunning || !self.discReady) {
+        return;
+    }
+
+    self.bootSmokeRunning = YES;
+    self.discButton.enabled = NO;
+    self.bootButton.enabled = NO;
+    self.bootStatusLabel.textColor = UIColor.systemOrangeColor;
+    self.bootStatusLabel.text =
+        @"Boot smoke: Coordinating the external pair and booting one bounded "
+         "guest frame…";
+
+    __weak SFRootViewController *weakSelf = self;
+    [self.discLibrary
+        runFirstMissionBootSmokeWithCompletion:^(NSString *status,
+                                                  BOOL succeeded) {
+        SFRootViewController *strongSelf = weakSelf;
+        strongSelf.bootSmokeRunning = NO;
+        strongSelf.discButton.enabled = YES;
+        strongSelf.bootButton.enabled = strongSelf.discReady;
+        strongSelf.bootStatusLabel.text = status;
+        strongSelf.bootStatusLabel.textColor =
+            succeeded ? UIColor.systemGreenColor : UIColor.systemRedColor;
+    }];
 }
 
 - (void)chooseDiscFolder:(UIButton *)sender {

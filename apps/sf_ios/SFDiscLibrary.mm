@@ -4,10 +4,15 @@
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 #include "sf/disc/disc_folder.hpp"
+#include "sf/game/game_disc.hpp"
+#include "sf/game/legacy_first_mission_runtime.hpp"
+#include "sf/game/mission.hpp"
 
+#include <chrono>
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <optional>
 #include <regex>
 #include <stdexcept>
@@ -15,6 +20,13 @@
 #include <system_error>
 
 namespace {
+
+using SmokeClock = std::chrono::steady_clock;
+
+double elapsedMilliseconds(SmokeClock::time_point start) noexcept {
+    return std::chrono::duration<double, std::milli>(SmokeClock::now() - start)
+        .count();
+}
 
 NSString *const SFDiscFolderBookmarkKey = @"SFDiscFolderBookmark";
 
@@ -103,8 +115,11 @@ bool identifiesSameFile(const std::filesystem::path& first,
 
 @interface SFDiscLibrary () <UIDocumentPickerDelegate>
 @property(nonatomic, strong, readwrite, nullable) NSURL *cueURL;
+@property(nonatomic, strong, nullable) NSURL *binaryURL;
 @property(nonatomic, strong, nullable) NSURL *accessedDirectoryURL;
 @property(nonatomic) BOOL accessingDirectory;
+@property(nonatomic) BOOL bootSmokeRunning;
+@property(nonatomic) BOOL validatingCandidate;
 @property(nonatomic, strong) NSOperationQueue *validationQueue;
 @property(nonatomic) NSUInteger selectionGeneration;
 @end
@@ -115,6 +130,8 @@ bool identifiesSameFile(const std::filesystem::path& first,
     self = [super init];
     if (self != nil) {
         _accessingDirectory = NO;
+        _bootSmokeRunning = NO;
+        _validatingCandidate = NO;
         _validationQueue = [[NSOperationQueue alloc] init];
         _validationQueue.name = @"com.syphonfilter.port.disc-validation";
         _validationQueue.maxConcurrentOperationCount = 1;
@@ -146,6 +163,7 @@ bool identifiesSameFile(const std::filesystem::path& first,
     self.accessingDirectory = NO;
     self.accessedDirectoryURL = nil;
     self.cueURL = nil;
+    self.binaryURL = nil;
 }
 
 - (void)presentFolderPickerFromViewController:(UIViewController *)viewController {
@@ -239,6 +257,7 @@ bool identifiesSameFile(const std::filesystem::path& first,
         if (generation != self.selectionGeneration) {
             return;
         }
+        self.validatingCandidate = NO;
         if (self.cueURL != nil) {
             NSString *status = [NSString
                 stringWithFormat:@"%@ Previous disc %@ remains ready.",
@@ -252,6 +271,7 @@ bool identifiesSameFile(const std::filesystem::path& first,
 
 - (void)finishCandidateSuccessWithDirectoryURL:(NSURL *)directoryURL
                                          cueURL:(NSURL *)cueURL
+                                      binaryURL:(NSURL *)binaryURL
                                         bookmark:(nullable NSData *)bookmark
                                    saveBookmark:(BOOL)saveBookmark
                                       generation:(NSUInteger)generation {
@@ -260,6 +280,7 @@ bool identifiesSameFile(const std::filesystem::path& first,
             [directoryURL stopAccessingSecurityScopedResource];
             return;
         }
+        self.validatingCandidate = NO;
 
         if (saveBookmark) {
             if (bookmark != nil) {
@@ -279,6 +300,7 @@ bool identifiesSameFile(const std::filesystem::path& first,
         self.accessedDirectoryURL = directoryURL;
         self.accessingDirectory = YES;
         self.cueURL = cueURL;
+        self.binaryURL = binaryURL;
         if (previousAccessing && previousDirectoryURL != nil) {
             [previousDirectoryURL stopAccessingSecurityScopedResource];
         }
@@ -328,6 +350,7 @@ bool identifiesSameFile(const std::filesystem::path& first,
         }
 
         NSURL *validatedCueURL = nil;
+        NSURL *validatedBinaryURL = nil;
         NSData *bookmark = nil;
         BOOL validPair = NO;
         try {
@@ -348,7 +371,8 @@ bool identifiesSameFile(const std::filesystem::path& first,
                 throw std::runtime_error{"Coordinated disc pair changed"};
             }
             validatedCueURL = fileURL(pair.cue_path, NO);
-            validPair = validatedCueURL != nil;
+            validatedBinaryURL = fileURL(pair.binary_path, NO);
+            validPair = validatedCueURL != nil && validatedBinaryURL != nil;
 
             if (validPair && saveBookmark) {
                 NSError *bookmarkError = nil;
@@ -373,6 +397,7 @@ bool identifiesSameFile(const std::filesystem::path& first,
         }
         [self finishCandidateSuccessWithDirectoryURL:directoryURL
                                                cueURL:validatedCueURL
+                                            binaryURL:validatedBinaryURL
                                               bookmark:bookmark
                                          saveBookmark:saveBookmark
                                             generation:generation];
@@ -387,6 +412,7 @@ bool identifiesSameFile(const std::filesystem::path& first,
             if (generation != self.selectionGeneration) {
                 return;
             }
+            self.validatingCandidate = NO;
             NSString *failure =
                 @"Disc: Files did not grant access to that folder. Choose the "
                  "folder again.";
@@ -455,6 +481,243 @@ bool identifiesSameFile(const std::filesystem::path& first,
                                 generation:generation];
 }
 
+- (void)finishBootSmokeWithStatus:(NSString *)status
+                           success:(BOOL)success
+                        generation:(NSUInteger)generation
+                        completion:
+                            (SFDiscLibraryBootSmokeCompletionHandler)completion {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self.bootSmokeRunning = NO;
+        if (generation != self.selectionGeneration) {
+            completion(@"Boot smoke: Disc selection changed before validation "
+                        "finished. Run it again for the current folder.",
+                       NO);
+            return;
+        }
+        completion(status, success);
+    });
+}
+
+- (void)runFirstMissionBootSmokeWithCompletion:
+    (SFDiscLibraryBootSmokeCompletionHandler)completion {
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self runFirstMissionBootSmokeWithCompletion:completion];
+        });
+        return;
+    }
+
+    if (self.bootSmokeRunning) {
+        completion(@"Boot smoke: A validation run is already active.", NO);
+        return;
+    }
+    if (self.validatingCandidate) {
+        completion(@"Boot smoke: The selected folder is still being "
+                    "validated. Run the smoke after it becomes ready.",
+                   NO);
+        return;
+    }
+
+    NSURL *directoryURL = self.accessedDirectoryURL;
+    NSURL *cueURL = self.cueURL;
+    NSURL *binaryURL = self.binaryURL;
+    if (!self.accessingDirectory || directoryURL == nil || cueURL == nil ||
+        binaryURL == nil) {
+        completion(@"Boot smoke: Choose a valid external CUE/BIN folder first.",
+                   NO);
+        return;
+    }
+
+    self.bootSmokeRunning = YES;
+    const NSUInteger generation = self.selectionGeneration;
+    const auto smokeStart = SmokeClock::now();
+    NSLog(@"SF_GAME_BOOT_SMOKE step=coordinate result=BEGIN");
+
+    NSFileAccessIntent *directoryIntent = [NSFileAccessIntent
+        readingIntentWithURL:directoryURL
+                     options:NSFileCoordinatorReadingWithoutChanges];
+    NSFileAccessIntent *cueIntent = [NSFileAccessIntent
+        readingIntentWithURL:cueURL
+                     options:NSFileCoordinatorReadingWithoutChanges];
+    NSFileAccessIntent *binaryIntent = [NSFileAccessIntent
+        readingIntentWithURL:binaryURL
+                     options:NSFileCoordinatorReadingWithoutChanges];
+    NSArray<NSFileAccessIntent *> *intents =
+        @[ directoryIntent, cueIntent, binaryIntent ];
+    NSFileCoordinator *coordinator = [[NSFileCoordinator alloc]
+        initWithFilePresenter:nil];
+    [coordinator coordinateAccessWithIntents:intents
+                                       queue:self.validationQueue
+                                  byAccessor:^(NSError *coordinationError) {
+        @autoreleasepool {
+            if (coordinationError != nil) {
+                NSLog(@"SF_GAME_BOOT_SMOKE step=coordinate result=FAIL "
+                       "total_ms=%.3f",
+                      elapsedMilliseconds(smokeStart));
+                [self finishBootSmokeWithStatus:
+                          @"Boot smoke: Files could not coordinate full access "
+                           "to the external CUE/BIN pair."
+                                           success:NO
+                                        generation:generation
+                                        completion:completion];
+                return;
+            }
+
+            NSString *failureStage = @"external disc validation";
+            try {
+                NSLog(@"SF_GAME_BOOT_SMOKE step=coordinate result=PASS "
+                       "total_ms=%.3f",
+                      elapsedMilliseconds(smokeStart));
+                const auto coordinatedDirectoryPath =
+                    fileSystemPath(directoryIntent.URL);
+                const auto coordinatedCuePath = fileSystemPath(cueIntent.URL);
+                const auto coordinatedBinaryPath =
+                    fileSystemPath(binaryIntent.URL);
+                const auto pair =
+                    sf::disc::discoverCueBinPair(coordinatedDirectoryPath);
+                if (!identifiesSameFile(pair.cue_path, coordinatedCuePath) ||
+                    !identifiesSameFile(pair.binary_path,
+                                        coordinatedBinaryPath)) {
+                    throw std::runtime_error{"Coordinated disc pair changed"};
+                }
+
+                failureStage = @"disc open";
+                const auto discOpenStart = SmokeClock::now();
+                NSLog(@"SF_GAME_BOOT_SMOKE step=disc_open result=BEGIN "
+                       "total_ms=%.3f",
+                      elapsedMilliseconds(smokeStart));
+                auto disc = sf::game::GameDisc::open(coordinatedCuePath);
+                if (!disc.game()) {
+                    throw std::runtime_error{"Unsupported disc build"};
+                }
+                NSLog(@"SF_GAME_BOOT_SMOKE step=disc_open result=PASS "
+                       "step_ms=%.3f total_ms=%.3f",
+                      elapsedMilliseconds(discOpenStart),
+                      elapsedMilliseconds(smokeStart));
+
+                failureStage = @"mission load";
+                const auto missionLoadStart = SmokeClock::now();
+                NSLog(@"SF_GAME_BOOT_SMOKE step=mission_load result=BEGIN "
+                       "total_ms=%.3f",
+                      elapsedMilliseconds(smokeStart));
+                auto mission = sf::game::MissionPackage::loadFirst(disc);
+                NSLog(@"SF_GAME_BOOT_SMOKE step=mission_load result=PASS "
+                       "step_ms=%.3f total_ms=%.3f",
+                      elapsedMilliseconds(missionLoadStart),
+                      elapsedMilliseconds(smokeStart));
+
+                failureStage = @"guest bootstrap";
+                const auto guestBootStart = SmokeClock::now();
+                NSLog(@"SF_GAME_BOOT_SMOKE step=guest_boot result=BEGIN "
+                       "total_ms=%.3f",
+                      elapsedMilliseconds(smokeStart));
+                const auto bootstrapStart = SmokeClock::now();
+                auto runtime =
+                    std::make_unique<sf::game::LegacyFirstMissionRuntime>(
+                        mission.definition(), mission.legacyImage());
+                const auto initialPresentation = runtime->presentationFrame();
+                const BOOL initialCoherent =
+                    initialPresentation != nullptr &&
+                    sf::game::legacyPresentationFrameConsumable(
+                        *initialPresentation, 0U) &&
+                    initialPresentation->guest_frame == runtime->guestFrame();
+                if (!runtime->ready() || runtime->faulted() ||
+                    !initialCoherent) {
+                    const auto faultDetail =
+                        std::string{runtime->faultDetail()};
+                    NSString *fault = [NSString
+                        stringWithUTF8String:faultDetail.c_str()];
+                    NSString *safeFault = fault != nil ? fault : @"unknown";
+                    NSLog(@"SF_GAME_BOOT_SMOKE step=guest_boot result=FAIL "
+                           "phase=bootstrap reason=%@ ready=%d faulted=%d "
+                           "guest_frame=%llu frame=%d coherent=%d "
+                           "step_ms=%.3f total_ms=%.3f",
+                          safeFault, runtime->ready(), runtime->faulted(),
+                          static_cast<unsigned long long>(runtime->guestFrame()),
+                          initialPresentation != nullptr, initialCoherent,
+                          elapsedMilliseconds(guestBootStart),
+                          elapsedMilliseconds(smokeStart));
+                    throw std::runtime_error{"Guest bootstrap did not publish a "
+                                             "coherent first frame"};
+                }
+                NSLog(@"SF_GAME_BOOT_SMOKE step=guest_boot phase=bootstrap "
+                       "result=PASS guest_frame=%llu sequence=%llu "
+                       "phase_ms=%.3f total_ms=%.3f",
+                      static_cast<unsigned long long>(runtime->guestFrame()),
+                      static_cast<unsigned long long>(
+                          initialPresentation->sequence),
+                      elapsedMilliseconds(bootstrapStart),
+                      elapsedMilliseconds(smokeStart));
+
+                const auto firstAdvanceStart = SmokeClock::now();
+                const auto initialSequence = initialPresentation->sequence;
+                runtime->setHostPadState({});
+                runtime->advanceHostUpdate();
+                const auto presentation = runtime->presentationFrame();
+                const BOOL coherentPresentation =
+                    presentation != nullptr &&
+                    sf::game::legacyPresentationFrameConsumable(
+                        *presentation, initialSequence) &&
+                    presentation->guest_frame == runtime->guestFrame();
+                if (!runtime->ready() || runtime->faulted() ||
+                    runtime->guestFrame() == 0U || !coherentPresentation) {
+                    const auto faultDetail =
+                        std::string{runtime->faultDetail()};
+                    NSString *fault = [NSString
+                        stringWithUTF8String:faultDetail.c_str()];
+                    NSString *safeFault = fault != nil ? fault : @"unknown";
+                    NSLog(@"SF_GAME_BOOT_SMOKE step=guest_boot result=FAIL "
+                           "phase=first_advance reason=%@ ready=%d faulted=%d "
+                           "guest_frame=%llu frame=%d coherent=%d "
+                           "phase_ms=%.3f step_ms=%.3f total_ms=%.3f",
+                          safeFault, runtime->ready(), runtime->faulted(),
+                          static_cast<unsigned long long>(runtime->guestFrame()),
+                          presentation != nullptr, coherentPresentation,
+                          elapsedMilliseconds(firstAdvanceStart),
+                          elapsedMilliseconds(guestBootStart),
+                          elapsedMilliseconds(smokeStart));
+                    throw std::runtime_error{"Guest first update did not "
+                                             "publish a coherent frame"};
+                }
+
+                NSLog(@"SF_GAME_BOOT_SMOKE step=guest_boot result=PASS "
+                       "guest_frame=%llu sequence=%llu presentation=1 "
+                       "advance_ms=%.3f step_ms=%.3f "
+                       "total_ms=%.3f",
+                      static_cast<unsigned long long>(runtime->guestFrame()),
+                      static_cast<unsigned long long>(presentation->sequence),
+                      elapsedMilliseconds(firstAdvanceStart),
+                      elapsedMilliseconds(guestBootStart),
+                      elapsedMilliseconds(smokeStart));
+                NSString *status = [NSString
+                    stringWithFormat:
+                        @"Boot smoke: PASS — supported disc, mission 1, guest "
+                         "frame %llu, coherent presentation. Nothing was "
+                         "copied into the app.",
+                        static_cast<unsigned long long>(runtime->guestFrame())];
+                [self finishBootSmokeWithStatus:status
+                                         success:YES
+                                      generation:generation
+                                      completion:completion];
+            } catch (const std::exception &) {
+                // Disc parsers may include provider paths in exception text.
+                // Keep shareable UI/console output stage-only.
+                NSLog(@"SF_GAME_BOOT_SMOKE result=FAIL stage=%@ "
+                       "total_ms=%.3f",
+                      failureStage, elapsedMilliseconds(smokeStart));
+                NSString *status = [NSString
+                    stringWithFormat:@"Boot smoke: FAIL during %@. Nothing "
+                                     "was copied into the app.",
+                                     failureStage];
+                [self finishBootSmokeWithStatus:status
+                                         success:NO
+                                      generation:generation
+                                      completion:completion];
+            }
+        }
+    }];
+}
+
 - (void)adoptDirectoryURL:(NSURL *)directoryURL
              saveBookmark:(BOOL)saveBookmark {
     if (![NSThread isMainThread]) {
@@ -466,6 +729,9 @@ bool identifiesSameFile(const std::filesystem::path& first,
 
     self.selectionGeneration += 1U;
     const auto generation = self.selectionGeneration;
+    self.validatingCandidate = YES;
+    [self emitStatus:@"Disc: Validating the selected external folder…"
+                ready:NO];
     [self.validationQueue addOperationWithBlock:^{
         [self validateCandidateDirectoryURL:directoryURL
                                saveBookmark:saveBookmark
