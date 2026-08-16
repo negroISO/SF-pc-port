@@ -2,12 +2,12 @@
 
 ## Updated
 
-2026-08-16 14:10 CDT
+2026-08-16 18:58 CDT
 
 ## Workspace
 
 `/Volumes/iPhone/PS1_Rrecomps/SF1`, active feature branch
-`ios-guest-renderer-smoke` from pushed `ios-port` commit `108922e`. Public `origin` is
+`ios-full-game-host` from pushed `ios-guest-renderer-smoke` commit `99906b6`. Public `origin` is
 `https://github.com/negroISO/SF-pc-port.git`; never commit retail media,
 derived retail data, device/signing identifiers, credentials, or anything under
 `out/`/`tmp/`.
@@ -20,6 +20,28 @@ verified presentation-clock fix committed as `900009c`; do not merge to
 
 ## Current status
 
+- **LATEST CHECKPOINT 2026-08-16 18:58 CDT — full iOS title host plus title/briefing VRAM fix.**
+  The uncommitted `ios-full-game-host` slice adds `apps/sf_ios_game`, iOS game
+  presets, persistent external-disc lease startup, controller-preflight, native
+  persistence for the existing controller settings model, and default 4:3 /
+  adaptive aspect settings. It has reached the physical title menu, intro
+  movies, briefing, and Mission 1 with DualSense input.
+- Root-title Circle/Create no longer exits the host; the button remains a back
+  action in nested title screens.
+- A second Apple LP64 VRAM bug was found in two independent TIM upload paths:
+  title assets and retail briefing textures packed only two 16-bit words into
+  each 64-bit Apple `u_long`, inserting two transparent words after every pair.
+  Both now use a shared contiguous-word packer. The title logo/menu and blue
+  briefing panel/text are legible in physical captures; compare
+  `tmp/validation/2026-08-16-ios-full-game/ocr-before-after-title.txt`.
+- Validation passed: focused VRAM regression, native PsyCross CTest 27/27,
+  portable CTest 24/24, Simulator full-game Release, signed device full-game
+  Release, strict/deep signature, physical install/launch, Mission 1 rooms
+  73/74/81/82/83, and clean exit 0. Evidence:
+  `tmp/validation/2026-08-16-ios-full-game/README.md`.
+- Still open: post-fix gameplay capture for the earlier solid brown/red area,
+  full mission/save/load validation, savestates, iOS settings UI, and the PS1
+  recomps template extraction.
 - A continuous lifecycle-owned guest loop now drives the bounded renderer.
   `runPsyCrossGuestLoopSmoke()` preloads the guest to the visibility
   threshold and runs a new `SceneViewerRunOptions::continuous_guest_loop`

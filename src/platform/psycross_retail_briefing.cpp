@@ -1,5 +1,6 @@
 #include "psycross_retail_briefing.hpp"
 #include "psycross_font_texture.hpp"
+#include "psycross_vram.hpp"
 
 #include "sf/assets/mission_briefing.hpp"
 #include "sf/assets/tim_image.hpp"
@@ -100,7 +101,7 @@ int texturePageMode(assets::TimPixelMode mode) {
   return 2;
 }
 
-void uploadTimBlock(const assets::TimBlock &block) {
+void uploadBriefingTimBlock(const assets::TimBlock &block) {
   const auto checked = [](std::uint16_t value) {
     if (value > static_cast<std::uint16_t>(std::numeric_limits<short>::max())) {
       throw core::Error{core::ErrorCode::unsupported,
@@ -110,11 +111,7 @@ void uploadTimBlock(const assets::TimBlock &block) {
   };
   RECT16 rect{checked(block.x), checked(block.y), checked(block.width_words),
               checked(block.height)};
-  std::vector<u_long> packed((block.words.size() + 1U) / 2U);
-  for (std::size_t index = 0U; index < block.words.size(); ++index) {
-    packed[index / 2U] |= static_cast<u_long>(block.words[index])
-                          << ((index & 1U) * 16U);
-  }
+  auto packed = packVramWords(block.words);
   LoadImage(&rect, packed.data());
 }
 
@@ -522,9 +519,9 @@ struct PsyCrossRetailBriefing::Impl final {
       if (native_font != nullptr && texture.name.starts_with("FONT")) {
         continue;
       }
-      uploadTimBlock(texture.image.pixels());
+      uploadBriefingTimBlock(texture.image.pixels());
     }
-    uploadTimBlock(*textures.front().image.clut());
+    uploadBriefingTimBlock(*textures.front().image.clut());
     DrawSync(0);
   }
 

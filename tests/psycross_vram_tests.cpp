@@ -131,6 +131,22 @@ int main() {
     return 15;
   }
 
+  constexpr std::array title_words{
+      std::uint16_t{0x0123U}, std::uint16_t{0x4567U},
+      std::uint16_t{0x89abU}, std::uint16_t{0xcdefU},
+      std::uint16_t{0x2101U}, std::uint16_t{0x6543U},
+      std::uint16_t{0xa987U}, std::uint16_t{0xedcbU},
+      std::uint16_t{0x1357U}};
+  const auto packed_title_words = packVramWords(title_words);
+  const auto *packed_title_readback =
+      reinterpret_cast<const std::uint16_t *>(packed_title_words.data());
+  for (std::size_t index = 0U; index < title_words.size(); ++index) {
+    if (packed_title_readback[index] != title_words[index]) {
+      std::cerr << "TIM upload inserted host-word padding\n";
+      return 16;
+    }
+  }
+
   std::vector<std::uint16_t> scrolling_page(64U * 256U);
   for (std::size_t index = 0U; index < scrolling_page.size(); ++index) {
     scrolling_page[index] = static_cast<std::uint16_t>(index & 0xffffU);

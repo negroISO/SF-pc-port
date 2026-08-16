@@ -18,6 +18,8 @@ option(SF_BUILD_IOS_RENDERER_SMOKE
     "Build the ROM-free SDL2/PsyCross GLES iOS smoke application" OFF)
 option(SF_BUILD_IOS_GUEST_RENDERER_SMOKE
     "Build the bounded guest-driven PsyCross GLES iOS smoke application" OFF)
+option(SF_BUILD_IOS_GAME
+    "Build the full SDL2/PsyCross iOS game application" OFF)
 option(SF_IOS_CODE_SIGNING "Enable code signing for iOS application targets" OFF)
 set(SF_IOS_BUNDLE_IDENTIFIER "com.syphonfilter.port" CACHE STRING
     "Bundle identifier for the iOS bootstrap application")
@@ -27,6 +29,9 @@ set(SF_IOS_RENDERER_SMOKE_BUNDLE_IDENTIFIER
 set(SF_IOS_GUEST_RENDERER_SMOKE_BUNDLE_IDENTIFIER
     "com.syphonfilter.port.guest-renderer-smoke" CACHE STRING
     "Bundle identifier for the iOS guest renderer smoke application")
+set(SF_IOS_GAME_BUNDLE_IDENTIFIER
+    "com.syphonfilter.port.game" CACHE STRING
+    "Bundle identifier for the full iOS game application")
 set(SF_IOS_DEPS_PREFIX "" CACHE PATH
     "Validated SDL2/OpenAL/FFmpeg iOS dependency prefix")
 
@@ -347,6 +352,13 @@ if(SF_ENABLE_PSYCROSS)
                 "SF_BUILD_IOS_GUEST_RENDERER_SMOKE requires an iOS toolchain")
         endif()
         add_subdirectory(apps/sf_ios_guest_renderer_smoke)
+    endif()
+
+    if(SF_BUILD_IOS_GAME)
+        if(NOT IOS)
+            message(FATAL_ERROR "SF_BUILD_IOS_GAME requires an iOS toolchain")
+        endif()
+        add_subdirectory(apps/sf_ios_game)
     endif()
 
     if(NOT IOS)

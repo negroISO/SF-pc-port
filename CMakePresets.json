@@ -119,6 +119,32 @@
         "SF_BUILD_IOS_GUEST_RENDERER_SMOKE": "ON",
         "SF_IOS_DEPS_PREFIX": "${sourceDir}/out/ios-deps/install/iphonesimulator"
       }
+    },
+    {
+      "name": "ios-device-game",
+      "displayName": "iOS device arm64 / full game",
+      "inherits": "ios-base",
+      "binaryDir": "${sourceDir}/out/ios-device-game",
+      "cacheVariables": {
+        "CMAKE_OSX_SYSROOT": "iphoneos",
+        "SF_BUILD_IOS_SHELL": "OFF",
+        "SF_ENABLE_PSYCROSS": "ON",
+        "SF_BUILD_IOS_GAME": "ON",
+        "SF_IOS_DEPS_PREFIX": "${sourceDir}/out/ios-deps/install/iphoneos"
+      }
+    },
+    {
+      "name": "ios-simulator-game",
+      "displayName": "iOS Simulator arm64 / full game",
+      "inherits": "ios-base",
+      "binaryDir": "${sourceDir}/out/ios-simulator-game",
+      "cacheVariables": {
+        "CMAKE_OSX_SYSROOT": "iphonesimulator",
+        "SF_BUILD_IOS_SHELL": "OFF",
+        "SF_ENABLE_PSYCROSS": "ON",
+        "SF_BUILD_IOS_GAME": "ON",
+        "SF_IOS_DEPS_PREFIX": "${sourceDir}/out/ios-deps/install/iphonesimulator"
+      }
     }
   ],
   "buildPresets": [
@@ -223,6 +249,28 @@
       "configurePreset": "ios-simulator-guest-renderer-smoke",
       "configuration": "Release",
       "targets": ["sf_ios_guest_renderer_smoke"],
+      "nativeToolOptions": [
+        "CLANG_MODULES_BUILD_SESSION_FILE=${sourceDir}/out/xcode-cache/ModuleCache.noindex/Session.modulevalidation",
+        "SDK_STAT_CACHE_ENABLE=NO"
+      ]
+    },
+    {
+      "name": "ios-device-game-release",
+      "displayName": "iOS device Release / full game",
+      "configurePreset": "ios-device-game",
+      "configuration": "Release",
+      "targets": ["sf_ios_game"],
+      "nativeToolOptions": [
+        "CLANG_MODULES_BUILD_SESSION_FILE=${sourceDir}/out/xcode-cache/ModuleCache.noindex/Session.modulevalidation",
+        "SDK_STAT_CACHE_ENABLE=NO"
+      ]
+    },
+    {
+      "name": "ios-simulator-game-release",
+      "displayName": "iOS Simulator Release / full game",
+      "configurePreset": "ios-simulator-game",
+      "configuration": "Release",
+      "targets": ["sf_ios_game"],
       "nativeToolOptions": [
         "CLANG_MODULES_BUILD_SESSION_FILE=${sourceDir}/out/xcode-cache/ModuleCache.noindex/Session.modulevalidation",
         "SDK_STAT_CACHE_ENABLE=NO"

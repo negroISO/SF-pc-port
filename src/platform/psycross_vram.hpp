@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <vector>
 
 namespace sf::platform::detail {
 
@@ -60,6 +61,8 @@ residentTexturePageToken(std::uint64_t generation,
   return (generation << resident_texture_page_token_bits) | physical_page;
 }
 [[nodiscard]] std::uint32_t validateVlf(std::span<const std::byte> bytes);
+[[nodiscard]] std::vector<u_long>
+packVramWords(std::span<const std::uint16_t> words);
 [[nodiscard]] std::span<const std::byte>
 vlfPage(std::span<const std::byte> bytes, std::uint32_t page_mask,
         unsigned int page);

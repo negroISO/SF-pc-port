@@ -79,6 +79,21 @@ physicalTexturePageRect(unsigned int physical_page) noexcept {
 
 } // namespace
 
+std::vector<u_long> packVramWords(std::span<const std::uint16_t> words) {
+  // LoadImage's legacy signature is u_long*, but PsyCross consumes the
+  // payload as contiguous 16-bit VRAM words. On Apple LP64, u_long contains
+  // four VRAM words; packing only two leaves transparent padding lanes.
+  const auto storage_count =
+      (words.size() * sizeof(std::uint16_t) + sizeof(u_long) - 1U) /
+      sizeof(u_long);
+  std::vector<u_long> result(storage_count);
+  auto *destination = reinterpret_cast<std::uint16_t *>(result.data());
+  for (std::size_t index = 0U; index < words.size(); ++index) {
+    destination[index] = words[index];
+  }
+  return result;
+}
+
 unsigned int physicalTexturePage(unsigned int page) noexcept {
   return (page & 15U) < 6U ? page + 6U : page;
 }

@@ -4,6 +4,7 @@
 #include "psycross_mission_start.hpp"
 #include "psycross_movie_player.hpp"
 #include "psycross_scene_viewer.hpp"
+#include "psycross_vram.hpp"
 #include "volumetric_atlas_texture.hpp"
 #include "psycross_video_mode.hpp"
 #include "psycross_window_mode.hpp"
@@ -652,15 +653,6 @@ ControllerMenuSample updateTitleInputPromptBindings(
   return menu_sample;
 }
 
-std::vector<u_long> packWords(std::span<const std::uint16_t> words) {
-  std::vector<u_long> packed((words.size() + 1U) / 2U);
-  for (std::size_t index = 0; index < words.size(); ++index) {
-    const auto shift = static_cast<unsigned int>((index & 1U) * 16U);
-    packed[index / 2U] |= static_cast<u_long>(words[index]) << shift;
-  }
-  return packed;
-}
-
 RECT16 blockRect(const assets::TimBlock &block) {
   const auto checked = [](std::uint16_t value) {
     if (value > static_cast<std::uint16_t>(std::numeric_limits<short>::max())) {
@@ -679,7 +671,7 @@ RECT16 blockRect(const assets::TimBlock &block) {
 
 void uploadBlock(const assets::TimBlock &block) {
   auto rect = blockRect(block);
-  auto packed = packWords(block.words);
+  auto packed = detail::packVramWords(block.words);
   LoadImage(&rect, packed.data());
 }
 
@@ -900,12 +892,24 @@ public:
               active_title_prompt_bindings,
               previous_title_controller_instance);
           const auto analog = title_menu_navigation_.update(menu_sample);
+          const bool root_title_menu =
+              menu_.phase() == game::TitlePhase::searching ||
+              menu_.phase() == game::TitlePhase::menu;
+          bool controller_cancel =
+              (pressed & (0x2000U | 0x01U)) != 0;
+#if defined(__APPLE__)
+          // On iOS, Circle and the DualSense Create/Share button map to the
+          // PS1 Circle/Select bits. Exiting the process from the root title
+          // looks like a hang when SpringBoard replaces the scene, so keep
+          // those buttons as back only inside nested title screens.
+          controller_cancel = controller_cancel && !root_title_menu;
+#endif
           const game::TitleInput input{
               .previous = (pressed & (0x80U | 0x10U)) != 0 || analog.previous,
               .next = (pressed & (0x20U | 0x40U)) != 0 || analog.next,
               .confirm = (pressed & (0x4000U | 0x8000U | 0x08U)) != 0 ||
                          interact_pressed,
-              .cancel = (pressed & (0x2000U | 0x01U)) != 0 || pause_pressed,
+              .cancel = controller_cancel || pause_pressed,
               .confirm_down = ((~readHostButtons(pad)) &
                                (0x4000U | 0x8000U | 0x08U)) != 0U ||
                               interact_down,
