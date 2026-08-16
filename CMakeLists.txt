@@ -16,14 +16,30 @@ option(SF_ENABLE_RELEASE_IPO "Enable interprocedural optimization in Release bui
 option(SF_BUILD_IOS_SHELL "Build the native iOS bootstrap application" OFF)
 option(SF_BUILD_IOS_RENDERER_SMOKE
     "Build the ROM-free SDL2/PsyCross GLES iOS smoke application" OFF)
+option(SF_BUILD_IOS_GUEST_RENDERER_SMOKE
+    "Build the bounded guest-driven PsyCross GLES iOS smoke application" OFF)
 option(SF_IOS_CODE_SIGNING "Enable code signing for iOS application targets" OFF)
 set(SF_IOS_BUNDLE_IDENTIFIER "com.syphonfilter.port" CACHE STRING
     "Bundle identifier for the iOS bootstrap application")
 set(SF_IOS_RENDERER_SMOKE_BUNDLE_IDENTIFIER
     "com.syphonfilter.port.renderer-smoke" CACHE STRING
     "Bundle identifier for the iOS renderer smoke application")
+set(SF_IOS_GUEST_RENDERER_SMOKE_BUNDLE_IDENTIFIER
+    "com.syphonfilter.port.guest-renderer-smoke" CACHE STRING
+    "Bundle identifier for the iOS guest renderer smoke application")
 set(SF_IOS_DEPS_PREFIX "" CACHE PATH
-    "Validated SDL2/OpenAL iOS dependency prefix used by renderer smoke")
+    "Validated SDL2/OpenAL/FFmpeg iOS dependency prefix")
+
+if(SF_BUILD_IOS_GUEST_RENDERER_SMOKE AND NOT SF_ENABLE_PSYCROSS)
+    message(FATAL_ERROR
+        "SF_BUILD_IOS_GUEST_RENDERER_SMOKE requires SF_ENABLE_PSYCROSS")
+endif()
+
+if(SF_ENABLE_PSYCROSS)
+    # PsyCross explicitly compiles several legacy .C sources as C. Enable the
+    # language before IPO probing and before its subdirectory is generated.
+    enable_language(C)
+endif()
 
 if(SF_ENABLE_RELEASE_IPO)
     include(CheckIPOSupported)
@@ -224,10 +240,37 @@ if(SF_ENABLE_PSYCROSS)
         message(FATAL_ERROR "PsyCross was not found at SF_PSYCROSS_ROOT=${SF_PSYCROSS_ROOT}")
     endif()
 
-    find_package(SDL2 CONFIG REQUIRED)
-    find_package(OpenAL CONFIG REQUIRED)
-    find_package(OpenGL REQUIRED)
-    find_package(FFMPEG REQUIRED)
+    if(IOS)
+        if(NOT SF_IOS_DEPS_PREFIX)
+            message(FATAL_ERROR
+                "SF_ENABLE_PSYCROSS on iOS requires SF_IOS_DEPS_PREFIX")
+        endif()
+        set(_sf_ios_sdl2_config
+            "${SF_IOS_DEPS_PREFIX}/lib/cmake/SDL2/SDL2Config.cmake")
+        set(_sf_ios_openal_config
+            "${SF_IOS_DEPS_PREFIX}/lib/cmake/OpenAL/OpenALConfig.cmake")
+        if(NOT EXISTS "${_sf_ios_sdl2_config}" OR
+           NOT EXISTS "${_sf_ios_openal_config}")
+            message(FATAL_ERROR
+                "SF_IOS_DEPS_PREFIX is missing the validated SDL2/OpenAL packages: ${SF_IOS_DEPS_PREFIX}")
+        endif()
+
+        enable_language(OBJCXX)
+        find_package(Threads REQUIRED)
+        set(SDL2_DIR "${SF_IOS_DEPS_PREFIX}/lib/cmake/SDL2")
+        set(OpenAL_DIR "${SF_IOS_DEPS_PREFIX}/lib/cmake/OpenAL")
+        find_package(SDL2 CONFIG REQUIRED)
+        find_package(OpenAL CONFIG REQUIRED)
+        include(SfIosFFmpeg)
+        find_library(SF_PSYCROSS_OPENGL_LIBRARY OpenGLES REQUIRED)
+        set(SF_PSYCROSS_GRAPHICS_LIBRARY "${SF_PSYCROSS_OPENGL_LIBRARY}")
+    else()
+        find_package(SDL2 CONFIG REQUIRED)
+        find_package(OpenAL CONFIG REQUIRED)
+        find_package(OpenGL REQUIRED)
+        find_package(FFMPEG REQUIRED)
+        set(SF_PSYCROSS_GRAPHICS_LIBRARY OpenGL::GL)
+    endif()
 
     # PsyCross links a plain `OpenAL` item. Make that name a real target so the
     # final executable receives vcpkg's correctly named OpenAL32 import library.
@@ -246,10 +289,17 @@ if(SF_ENABLE_PSYCROSS)
     )
     add_library(sf::media ALIAS sf_media)
     target_include_directories(sf_media PUBLIC include)
-    target_include_directories(sf_media SYSTEM PRIVATE ${FFMPEG_INCLUDE_DIRS})
-    target_link_directories(sf_media PRIVATE ${FFMPEG_LIBRARY_DIRS})
     target_compile_features(sf_media PUBLIC cxx_std_20)
-    target_link_libraries(sf_media PRIVATE sf::core ${FFMPEG_LIBRARIES})
+    if(IOS)
+        target_include_directories(sf_media SYSTEM PRIVATE
+            "${SF_IOS_DEPS_PREFIX}/include")
+        target_link_libraries(sf_media PRIVATE
+            sf::core ${SF_IOS_FFMPEG_LIBRARIES})
+    else()
+        target_include_directories(sf_media SYSTEM PRIVATE ${FFMPEG_INCLUDE_DIRS})
+        target_link_directories(sf_media PRIVATE ${FFMPEG_LIBRARY_DIRS})
+        target_link_libraries(sf_media PRIVATE sf::core ${FFMPEG_LIBRARIES})
+    endif()
     sf_set_project_warnings(sf_media)
 
     add_library(sf_psycross_backend
@@ -280,9 +330,19 @@ if(SF_ENABLE_PSYCROSS)
     target_compile_features(sf_psycross_backend PUBLIC cxx_std_20)
     target_link_libraries(sf_psycross_backend
         PUBLIC sf::game sf::platform_input
-        PRIVATE sf::media psycross_static OpenAL::OpenAL OpenGL::GL SDL2::SDL2)
+        PRIVATE sf::media psycross_static OpenAL::OpenAL
+                ${SF_PSYCROSS_GRAPHICS_LIBRARY} SDL2::SDL2)
     sf_set_project_warnings(sf_psycross_backend)
 
+    if(SF_BUILD_IOS_GUEST_RENDERER_SMOKE)
+        if(NOT IOS)
+            message(FATAL_ERROR
+                "SF_BUILD_IOS_GUEST_RENDERER_SMOKE requires an iOS toolchain")
+        endif()
+        add_subdirectory(apps/sf_ios_guest_renderer_smoke)
+    endif()
+
+    if(NOT IOS)
     add_executable(syphon_filter
         apps/syphon_filter/launcher/controls_page.cpp
         apps/syphon_filter/launcher/controller_capture.cpp
@@ -389,6 +449,12 @@ if(SF_ENABLE_PSYCROSS)
     add_executable(sf_movie_probe apps/sf_movie_probe/main.cpp)
     target_link_libraries(sf_movie_probe PRIVATE sf::game sf::media)
     sf_set_project_warnings(sf_movie_probe)
+    endif()
+
+    unset(SF_PSYCROSS_GRAPHICS_LIBRARY)
+    unset(SF_PSYCROSS_OPENGL_LIBRARY)
+    unset(_sf_ios_sdl2_config)
+    unset(_sf_ios_openal_config)
 endif()
 
 include(SfTests)

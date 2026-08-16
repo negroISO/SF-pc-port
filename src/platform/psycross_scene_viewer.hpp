@@ -4,9 +4,12 @@
 #include "sf/game/pause_menu.hpp"
 #include "sf/platform/host.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
+#include <optional>
 
 struct PADRAW;
 
@@ -24,6 +27,8 @@ enum class SceneExitReason {
   return_to_title,
   mission_complete,
   mission_selected,
+  bounded_presentation_complete,
+  bounded_presentation_rejected,
 };
 [[nodiscard]] InputPromptBindings
 titleControllerInputPromptBindings(int controller_family);
@@ -33,6 +38,26 @@ struct SceneViewerResult {
   SceneExitReason reason{SceneExitReason::exit_application};
   std::optional<std::uint32_t> selected_mission;
   std::optional<game::CampaignCarryState> carry;
+};
+
+struct SceneFrameSubmission {
+  std::uint64_t sequence{};
+  std::uint64_t guest_frame{};
+  std::size_t submitted{};
+  std::size_t rejected{};
+  int minimum_depth{};
+  int maximum_depth{};
+  int minimum_x{};
+  int maximum_x{};
+  int minimum_y{};
+  int maximum_y{};
+};
+
+struct SceneViewerRunOptions {
+  bool present_preloaded_frame_once{};
+  std::uint64_t expected_sequence{};
+  std::uint64_t expected_guest_frame{};
+  std::function<void(const SceneFrameSubmission &)> before_end_scene;
 };
 
 // Uses the same retail INTRFACE font page and ACD primitive path as the
@@ -80,7 +105,8 @@ public:
       std::uint16_t previous_buttons, const std::filesystem::path &cue_path,
       std::uint32_t maximum_unlocked_mission,
       std::unique_ptr<game::GameplaySession> preloaded_gameplay = {},
-      std::unique_ptr<PsyCrossAudioOutput> preloaded_audio = {});
+      std::unique_ptr<PsyCrossAudioOutput> preloaded_audio = {},
+      SceneViewerRunOptions options = {});
 
 private:
   KeyboardMouseBindings input_;

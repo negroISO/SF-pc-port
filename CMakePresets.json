@@ -93,6 +93,32 @@
         "SF_BUILD_IOS_RENDERER_SMOKE": "ON",
         "SF_IOS_DEPS_PREFIX": "${sourceDir}/out/ios-deps/install/iphonesimulator"
       }
+    },
+    {
+      "name": "ios-device-guest-renderer-smoke",
+      "displayName": "iOS device arm64 / bounded guest renderer smoke",
+      "inherits": "ios-base",
+      "binaryDir": "${sourceDir}/out/ios-device-guest-renderer-smoke",
+      "cacheVariables": {
+        "CMAKE_OSX_SYSROOT": "iphoneos",
+        "SF_BUILD_IOS_SHELL": "OFF",
+        "SF_ENABLE_PSYCROSS": "ON",
+        "SF_BUILD_IOS_GUEST_RENDERER_SMOKE": "ON",
+        "SF_IOS_DEPS_PREFIX": "${sourceDir}/out/ios-deps/install/iphoneos"
+      }
+    },
+    {
+      "name": "ios-simulator-guest-renderer-smoke",
+      "displayName": "iOS Simulator arm64 / bounded guest renderer smoke",
+      "inherits": "ios-base",
+      "binaryDir": "${sourceDir}/out/ios-simulator-guest-renderer-smoke",
+      "cacheVariables": {
+        "CMAKE_OSX_SYSROOT": "iphonesimulator",
+        "SF_BUILD_IOS_SHELL": "OFF",
+        "SF_ENABLE_PSYCROSS": "ON",
+        "SF_BUILD_IOS_GUEST_RENDERER_SMOKE": "ON",
+        "SF_IOS_DEPS_PREFIX": "${sourceDir}/out/ios-deps/install/iphonesimulator"
+      }
     }
   ],
   "buildPresets": [
@@ -175,6 +201,28 @@
       "configurePreset": "ios-simulator-renderer-smoke",
       "configuration": "Release",
       "targets": ["sf_ios_renderer_smoke"],
+      "nativeToolOptions": [
+        "CLANG_MODULES_BUILD_SESSION_FILE=${sourceDir}/out/xcode-cache/ModuleCache.noindex/Session.modulevalidation",
+        "SDK_STAT_CACHE_ENABLE=NO"
+      ]
+    },
+    {
+      "name": "ios-device-guest-renderer-smoke-release",
+      "displayName": "iOS device Release / bounded guest renderer smoke",
+      "configurePreset": "ios-device-guest-renderer-smoke",
+      "configuration": "Release",
+      "targets": ["sf_ios_guest_renderer_smoke"],
+      "nativeToolOptions": [
+        "CLANG_MODULES_BUILD_SESSION_FILE=${sourceDir}/out/xcode-cache/ModuleCache.noindex/Session.modulevalidation",
+        "SDK_STAT_CACHE_ENABLE=NO"
+      ]
+    },
+    {
+      "name": "ios-simulator-guest-renderer-smoke-release",
+      "displayName": "iOS Simulator Release / bounded guest renderer smoke",
+      "configurePreset": "ios-simulator-guest-renderer-smoke",
+      "configuration": "Release",
+      "targets": ["sf_ios_guest_renderer_smoke"],
       "nativeToolOptions": [
         "CLANG_MODULES_BUILD_SESSION_FILE=${sourceDir}/out/xcode-cache/ModuleCache.noindex/Session.modulevalidation",
         "SDK_STAT_CACHE_ENABLE=NO"

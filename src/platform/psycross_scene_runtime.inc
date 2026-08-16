@@ -3,7 +3,8 @@ SceneViewerResult PsyCrossSceneViewer::run(
     std::uint16_t previous_buttons, const std::filesystem::path &cue_path,
     std::uint32_t maximum_unlocked_mission,
     std::unique_ptr<game::GameplaySession> preloaded_gameplay,
-    std::unique_ptr<PsyCrossAudioOutput> preloaded_audio) {
+    std::unique_ptr<PsyCrossAudioOutput> preloaded_audio,
+    SceneViewerRunOptions options) {
   struct ControllerRumbleStop final {
     ~ControllerRumbleStop() { PsyX_Pad_StopRumble(0); }
   } controller_rumble_stop;
@@ -20,6 +21,7 @@ SceneViewerResult PsyCrossSceneViewer::run(
         mission, difficulty_ == game::CampaignDifficulty::agent);
   }
   auto &gameplay = *preloaded_gameplay;
+  const auto bounded_presentation = options.present_preloaded_frame_once;
   // The retail terminal transition can retire the live mission/inventory
   // tables on the same 20 Hz tick that requests EOL. Retain the newest valid
   // carry snapshot while those tables are still coherent so campaign flow
@@ -56,12 +58,16 @@ SceneViewerResult PsyCrossSceneViewer::run(
     latest_campaign_carry = gameplay.campaignCarryState();
     return true;
   };
-  apply_gameplay_modes();
-  auto gameplay_audio = preloaded_audio
-                            ? std::move(preloaded_audio)
-                            : std::make_unique<PsyCrossAudioOutput>();
-  PsyCrossUiAudio ui_audio{cue_path};
-  PsyCrossMoviePlayer movie_player;
+  std::unique_ptr<PsyCrossAudioOutput> gameplay_audio;
+  std::unique_ptr<PsyCrossUiAudio> ui_audio;
+  std::unique_ptr<PsyCrossMoviePlayer> movie_player;
+  if (!bounded_presentation) {
+    apply_gameplay_modes();
+    gameplay_audio = preloaded_audio ? std::move(preloaded_audio)
+                                     : std::make_unique<PsyCrossAudioOutput>();
+    ui_audio = std::make_unique<PsyCrossUiAudio>(cue_path);
+    movie_player = std::make_unique<PsyCrossMoviePlayer>();
+  }
   FireAnimation fire_animation{gameplay};
   const auto &player_hmd =
       std::get<assets::HmdModel>(gameplay.playerModel().geometry);
@@ -348,8 +354,10 @@ SceneViewerResult PsyCrossSceneViewer::run(
     }
     delivered_pad_motor_sequence = motors.sequence;
   };
-  ui_audio.setVolumePercent(pause_settings.sound_effects_volume);
-  ui_audio.setVoiceVolumePercent(pause_settings.voice_volume);
+  if (ui_audio) {
+    ui_audio->setVolumePercent(pause_settings.sound_effects_volume);
+    ui_audio->setVoiceVolumePercent(pause_settings.voice_volume);
+  }
   game::PauseMenu pause_menu;
   std::optional<game::RetailCheat> latched_pause_cheat;
   std::uint64_t pause_animation_tick = 0U;
@@ -400,8 +408,10 @@ SceneViewerResult PsyCrossSceneViewer::run(
     // MENU.OVL mutes the mission SPU/XA mix, but its BEEPSX bank remains
     // audible.  The UI source is independent from gameplay_audio for exactly
     // this reason.
-    ui_audio.setVolumePercent(settings.sound_effects_volume);
-    ui_audio.setVoiceVolumePercent(settings.voice_volume);
+    if (ui_audio) {
+      ui_audio->setVolumePercent(settings.sound_effects_volume);
+      ui_audio->setVoiceVolumePercent(settings.voice_volume);
+    }
     return true;
   };
   const auto commit_controller_settings = [&] {
@@ -424,7 +434,7 @@ SceneViewerResult PsyCrossSceneViewer::run(
           "Cannot persist controller settings to launcher settings\n");
     }
   };
-  if (!apply_pause_settings(pause_settings)) {
+  if (!bounded_presentation && !apply_pause_settings(pause_settings)) {
     return SceneViewerResult{previous_buttons,
                              SceneExitReason::return_to_title};
   }
@@ -991,6 +1001,49 @@ SceneViewerResult PsyCrossSceneViewer::run(
     }
     return stats;
   };
+  if (bounded_presentation) {
+    const auto frame = gameplay.legacyPresentationFrame();
+    if (!frame || gameplay.runtimeFaulted() ||
+        !game::legacyPresentationFrameConsumable(*frame, 0U) ||
+        frame->sequence != options.expected_sequence ||
+        frame->guest_frame != options.expected_guest_frame) {
+      PsyX_Log_Error(
+          "Bounded guest presentation was missing, faulted or changed\n");
+      return SceneViewerResult{
+          .previous_buttons = previous_buttons,
+          .reason = SceneExitReason::bounded_presentation_rejected,
+          .selected_mission = std::nullopt,
+          .carry = std::nullopt,
+      };
+    }
+
+    // This path deliberately bypasses input sampling, wall-clock accumulation,
+    // audio/FMVs and the ordinary viewer loop. draw_gameplay_frame() is the same
+    // production OT/texture/HUD path used by continuous play; its DrawOTag calls
+    // lazily open exactly one PsyCross scene.
+    const auto stats = draw_gameplay_frame(0U);
+    if (options.before_end_scene) {
+      options.before_end_scene(SceneFrameSubmission{
+          .sequence = frame->sequence,
+          .guest_frame = frame->guest_frame,
+          .submitted = stats.submitted,
+          .rejected = stats.rejected,
+          .minimum_depth = stats.minimum_depth,
+          .maximum_depth = stats.maximum_depth,
+          .minimum_x = stats.minimum_x,
+          .maximum_x = stats.maximum_x,
+          .minimum_y = stats.minimum_y,
+          .maximum_y = stats.maximum_y,
+      });
+    }
+    PsyX_EndScene();
+    return SceneViewerResult{
+        .previous_buttons = previous_buttons,
+        .reason = SceneExitReason::bounded_presentation_complete,
+        .selected_mission = std::nullopt,
+        .carry = std::nullopt,
+    };
+  }
   static_cast<void>(
       police_lightbar_animation.synchronize(gameplay, actor_tick, textures));
   std::array<psx::SpuPcmFrame, 4096U> gameplay_pcm{};
@@ -1146,7 +1199,7 @@ SceneViewerResult PsyCrossSceneViewer::run(
           current_frame_counter + performance_frequency;
     }
     gameplay_audio->update();
-    ui_audio.update();
+    ui_audio->update();
     PsyX_UpdateInput();
     const auto buttons = readButtons(pad);
     const auto held = static_cast<std::uint16_t>(~buttons);
@@ -1401,7 +1454,7 @@ SceneViewerResult PsyCrossSceneViewer::run(
       // output to silence while the ACD is open. Restoring the gain on exit
       // resumes music and ambient sound at the exact sample position.
       gameplay_audio->setGainPercent(0U);
-      ui_audio.setVolumePercent(pause_settings.sound_effects_volume);
+      ui_audio->setVolumePercent(pause_settings.sound_effects_volume);
       binding_capture = false;
       pause_analog_x = current_pause_x;
       pause_analog_y = current_pause_y;
@@ -1509,7 +1562,7 @@ SceneViewerResult PsyCrossSceneViewer::run(
                       game::retailCheatName(*detected_cheat),
                       activated ? "activated" : "not available here");
         if (activated) {
-          ui_audio.play(PsyCrossUiCue::confirm);
+          ui_audio->play(PsyCrossUiCue::confirm);
         }
         latched_pause_cheat = detected_cheat;
         cheat_consumed_input = true;
@@ -1566,17 +1619,17 @@ SceneViewerResult PsyCrossSceneViewer::run(
           pause_menu.expanded() != previous_pause_expanded ||
           static_cast<bool>(command);
       if (binding_completed) {
-        ui_audio.play(PsyCrossUiCue::confirm);
+        ui_audio->play(PsyCrossUiCue::confirm);
       } else if (binding_cancelled) {
-        ui_audio.play(PsyCrossUiCue::cancel);
+        ui_audio->play(PsyCrossUiCue::cancel);
       } else if ((pause_input.cancel || pause_input.pause) && pause_changed) {
-        ui_audio.play(PsyCrossUiCue::cancel);
+        ui_audio->play(PsyCrossUiCue::cancel);
       } else if (pause_input.confirm && pause_changed) {
-        ui_audio.play(PsyCrossUiCue::confirm);
+        ui_audio->play(PsyCrossUiCue::confirm);
       } else if ((pause_input.previous || pause_input.next ||
                   pause_input.left || pause_input.right) &&
                  pause_changed) {
-        ui_audio.play(PsyCrossUiCue::navigate);
+        ui_audio->play(PsyCrossUiCue::navigate);
       }
 
       switch (command.type) {
@@ -1584,7 +1637,7 @@ SceneViewerResult PsyCrossSceneViewer::run(
         break;
       case game::PauseCommandType::resume:
         pause_settings = pause_menu.settings();
-        ui_audio.reset();
+        ui_audio->reset();
         paused = false;
         gameplay_audio->setGainPercent(100U);
         if (!apply_pause_settings(pause_settings)) {
@@ -1628,7 +1681,7 @@ SceneViewerResult PsyCrossSceneViewer::run(
           }
         } else if (command.subject == static_cast<std::uint32_t>(
                                           game::PauseSetting::voice_volume)) {
-          ui_audio.playVoicePreview();
+          ui_audio->playVoicePreview();
         }
         break;
       case game::PauseCommandType::commit_settings:
@@ -1665,8 +1718,8 @@ SceneViewerResult PsyCrossSceneViewer::run(
         } else {
           pause_menu.setMissionSelectUnlocked(cheats_.stage_select);
         }
-        ui_audio.play(accepted ? PsyCrossUiCue::confirm
-                               : PsyCrossUiCue::cancel);
+        ui_audio->play(accepted ? PsyCrossUiCue::confirm
+                                : PsyCrossUiCue::cancel);
         PsyX_Log_Info("Retail cheat %s: %s\n", game::retailCheatName(cheat),
                       accepted ? (enabled ? "enabled" : "disabled")
                                : "not available here");
@@ -1682,7 +1735,7 @@ SceneViewerResult PsyCrossSceneViewer::run(
         }
         apply_gameplay_modes();
         discard_gameplay_audio("pause-restart-checkpoint");
-        ui_audio.reset();
+        ui_audio->reset();
         stop_controller_rumble();
         paused = false;
         gameplay_audio->setGainPercent(100U);
@@ -1712,7 +1765,7 @@ SceneViewerResult PsyCrossSceneViewer::run(
         latest_campaign_carry = gameplay.campaignCarryState();
         apply_gameplay_modes();
         discard_gameplay_audio("pause-restart-mission");
-        ui_audio.reset();
+        ui_audio->reset();
         stop_controller_rumble();
         paused = false;
         gameplay_audio->setGainPercent(100U);
@@ -2074,7 +2127,7 @@ SceneViewerResult PsyCrossSceneViewer::run(
                                  SceneExitReason::return_to_title};
       }
       stop_controller_rumble();
-      previous_buttons = movie_player.playStandalone(
+      previous_buttons = movie_player->playStandalone(
           scripted_movies[*scripted_movie_index], pad, previous_buttons);
       previous_frame_counter = SDL_GetPerformanceCounter();
       presentation_frame_meter.reset();

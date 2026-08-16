@@ -11,6 +11,8 @@
 #include "sf/core/error.hpp"
 #include "sf/game/campaign.hpp"
 #include "sf/game/game_disc.hpp"
+#include "sf/game/gameplay.hpp"
+#include "sf/game/legacy_presentation_bridge.hpp"
 #include "sf/game/mission.hpp"
 #include "sf/game/retail_cheats.hpp"
 #include "sf/game/title.hpp"
@@ -25,6 +27,7 @@
 #include <psx/libpad.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <iostream>
 #include <limits>
@@ -33,8 +36,214 @@
 #include <utility>
 #include <vector>
 
+#if defined(__APPLE__)
+#include <pthread.h>
+#endif
+
 namespace sf::platform {
 namespace {
+
+constexpr std::size_t maximum_smoke_readback_pixels = 16U * 1024U * 1024U;
+constexpr std::uint64_t fnv1a_offset_basis = 14695981039346656037ULL;
+constexpr std::uint64_t fnv1a_prime = 1099511628211ULL;
+
+[[nodiscard]] std::uint32_t drainFirstGlError() noexcept {
+  auto first = std::uint32_t{};
+  for (auto index = 0U; index < 64U; ++index) {
+    const auto error = glGetError();
+    if (error == GL_NO_ERROR) {
+      break;
+    }
+    if (first == 0U) {
+      first = static_cast<std::uint32_t>(error);
+    }
+  }
+  return first;
+}
+
+struct ScopedGlReadbackState final {
+  GLint draw_framebuffer{};
+  GLint read_framebuffer{};
+  GLint renderbuffer{};
+  GLint pixel_pack_buffer{};
+  GLint pack_alignment{4};
+  bool restored{};
+
+  void restore() noexcept {
+    if (restored) {
+      return;
+    }
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
+                      static_cast<GLuint>(draw_framebuffer));
+    glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                      static_cast<GLuint>(read_framebuffer));
+    glBindRenderbuffer(GL_RENDERBUFFER, static_cast<GLuint>(renderbuffer));
+    glBindBuffer(GL_PIXEL_PACK_BUFFER,
+                 static_cast<GLuint>(pixel_pack_buffer));
+    glPixelStorei(GL_PACK_ALIGNMENT, pack_alignment);
+    restored = true;
+  }
+
+  ~ScopedGlReadbackState() { restore(); }
+};
+
+void normalizeSubmissionEvidence(
+    const detail::SceneFrameSubmission &submission,
+    PsyCrossGuestFrameSmokeResult &result) noexcept {
+  result.submitted_primitives = submission.submitted;
+  result.rejected_primitives = submission.rejected;
+  if (submission.submitted == 0U) {
+    result.minimum_depth = 0;
+    result.maximum_depth = 0;
+    result.minimum_x = 0;
+    result.maximum_x = 0;
+    result.minimum_y = 0;
+    result.maximum_y = 0;
+    return;
+  }
+  result.minimum_depth = submission.minimum_depth;
+  result.maximum_depth = submission.maximum_depth;
+  result.minimum_x = submission.minimum_x;
+  result.maximum_x = submission.maximum_x;
+  result.minimum_y = submission.minimum_y;
+  result.maximum_y = submission.maximum_y;
+}
+
+void captureGuestFrameEvidence(const detail::SceneFrameSubmission &submission,
+                               PsyCrossGuestFrameSmokeResult &result) {
+  result.observer_called = true;
+  normalizeSubmissionEvidence(submission, result);
+  result.renderer_gl_error = drainFirstGlError();
+
+  ScopedGlReadbackState saved;
+  glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &saved.draw_framebuffer);
+  glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &saved.read_framebuffer);
+  glGetIntegerv(GL_RENDERBUFFER_BINDING, &saved.renderbuffer);
+  glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &saved.pixel_pack_buffer);
+  glGetIntegerv(GL_PACK_ALIGNMENT, &saved.pack_alignment);
+  const auto binding_query_error = drainFirstGlError();
+  if (result.renderer_gl_error == 0U) {
+    result.renderer_gl_error = binding_query_error;
+  }
+
+  result.draw_framebuffer =
+      static_cast<std::uint32_t>(saved.draw_framebuffer);
+  // Read exactly the native target which received the production draw, then
+  // restore the caller's independent read binding before PsyX_EndScene.
+  glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                    static_cast<GLuint>(saved.draw_framebuffer));
+  GLint read_framebuffer{};
+  glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read_framebuffer);
+  result.read_framebuffer = static_cast<std::uint32_t>(read_framebuffer);
+  result.framebuffer_status =
+      static_cast<std::uint32_t>(glCheckFramebufferStatus(GL_FRAMEBUFFER));
+
+  std::array<GLint, 4U> viewport{};
+  glGetIntegerv(GL_VIEWPORT, viewport.data());
+  result.viewport_x = viewport[0];
+  result.viewport_y = viewport[1];
+  result.viewport_width = viewport[2];
+  result.viewport_height = viewport[3];
+  const auto framebuffer_query_error = drainFirstGlError();
+  if (result.renderer_gl_error == 0U) {
+    result.renderer_gl_error = framebuffer_query_error;
+  }
+
+  if (result.framebuffer_status != GL_FRAMEBUFFER_COMPLETE ||
+      result.viewport_width <= 0 || result.viewport_height <= 0 ||
+      result.viewport_x < 0 || result.viewport_y < 0) {
+    saved.restore();
+    const auto restore_error = drainFirstGlError();
+    if (result.readback_gl_error == 0U) {
+      result.readback_gl_error = restore_error;
+    }
+    return;
+  }
+
+  const auto width = static_cast<std::size_t>(result.viewport_width);
+  const auto height = static_cast<std::size_t>(result.viewport_height);
+  if (height > maximum_smoke_readback_pixels / width) {
+    saved.restore();
+    return;
+  }
+  const auto pixel_count = width * height;
+  if (pixel_count == 0U || pixel_count > maximum_smoke_readback_pixels) {
+    saved.restore();
+    return;
+  }
+
+  std::vector<std::uint8_t> pixels(pixel_count * 4U);
+  glBindBuffer(GL_PIXEL_PACK_BUFFER, 0U);
+  glPixelStorei(GL_PACK_ALIGNMENT, 1);
+  glFinish();
+  glReadPixels(result.viewport_x, result.viewport_y, result.viewport_width,
+               result.viewport_height, GL_RGBA, GL_UNSIGNED_BYTE,
+               pixels.data());
+  result.readback_gl_error = drainFirstGlError();
+  saved.restore();
+  const auto restore_error = drainFirstGlError();
+  if (result.readback_gl_error == 0U) {
+    result.readback_gl_error = restore_error;
+  }
+  if (result.readback_gl_error != 0U) {
+    return;
+  }
+
+  result.pixel_count = pixel_count;
+  std::copy_n(pixels.begin(), result.lower_left_pixel.size(),
+              result.lower_left_pixel.begin());
+  const auto center_offset =
+      ((height / 2U) * width + (width / 2U)) * 4U;
+  std::copy_n(pixels.begin() + static_cast<std::ptrdiff_t>(center_offset),
+              result.center_pixel.size(), result.center_pixel.begin());
+
+  std::array<std::uint64_t, 64U> rgb_buckets{};
+  result.pixel_hash = fnv1a_offset_basis;
+  for (auto byte : pixels) {
+    result.pixel_hash ^= byte;
+    result.pixel_hash *= fnv1a_prime;
+  }
+  for (auto offset = std::size_t{}; offset < pixels.size(); offset += 4U) {
+    const auto red = pixels[offset];
+    const auto green = pixels[offset + 1U];
+    const auto blue = pixels[offset + 2U];
+    const auto alpha = pixels[offset + 3U];
+    if (alpha >= 240U) {
+      ++result.opaque_pixel_count;
+    }
+    if (red != result.lower_left_pixel[0] ||
+        green != result.lower_left_pixel[1] ||
+        blue != result.lower_left_pixel[2]) {
+      ++result.nonuniform_pixel_count;
+    }
+    const auto bucket = static_cast<std::uint16_t>(
+        (static_cast<std::uint16_t>(red >> 4U) << 8U) |
+        (static_cast<std::uint16_t>(green >> 4U) << 4U) |
+        static_cast<std::uint16_t>(blue >> 4U));
+    auto &bucket_word = rgb_buckets[bucket / 64U];
+    const auto bucket_bit = std::uint64_t{1U} << (bucket % 64U);
+    if ((bucket_word & bucket_bit) == 0U) {
+      bucket_word |= bucket_bit;
+      ++result.unique_rgb_buckets;
+    }
+    const auto luminance = static_cast<std::uint8_t>(
+        (54U * red + 183U * green + 19U * blue) >> 8U);
+    result.minimum_luminance =
+        std::min(result.minimum_luminance, luminance);
+    result.maximum_luminance =
+        std::max(result.maximum_luminance, luminance);
+  }
+}
+
+[[nodiscard]] bool hasVisibleGuestSource(
+    const game::GameplaySession &gameplay,
+    const game::LegacyPresentationFrame &frame) noexcept {
+  const auto &renderer = frame.renderer->state;
+  return !gameplay.presentationModels().empty() || renderer.scrim.visible ||
+         renderer.player.resident || !renderer.guest_sprites.empty() ||
+         !renderer.guest_lines.empty() ||
+         !renderer.guest_raw_packets.empty();
+}
 
 detail::StandaloneMovieSkipPolicy
 endingMovieSkipPolicy(const game::MissionDefinition &definition) noexcept {
@@ -1134,6 +1343,153 @@ std::unique_ptr<Host> createPsyCrossSceneHost(
   return std::make_unique<PsyCrossSceneHost>(
       std::move(title), std::move(mission), std::move(cue_path), graphics,
       input, cheats, std::move(controller_settings_commit));
+}
+
+PsyCrossGuestFrameSmokeResult renderPsyCrossGuestFrameSmoke(
+    const game::MissionPackage &mission,
+    PsyCrossGuestFrameSmokeOptions options) {
+  PsyCrossGuestFrameSmokeResult result;
+  if (options.maximum_guest_updates == 0U ||
+      options.maximum_guest_updates >
+          PsyCrossGuestFrameSmokeOptions::hard_maximum_guest_updates) {
+    result.status = PsyCrossGuestFrameSmokeStatus::invalid_options;
+    return result;
+  }
+#if defined(__APPLE__)
+  if (pthread_main_np() == 0) {
+    result.status = PsyCrossGuestFrameSmokeStatus::wrong_thread;
+    return result;
+  }
+#endif
+  if (SDL_GL_GetCurrentWindow() == nullptr ||
+      SDL_GL_GetCurrentContext() == nullptr) {
+    result.status = PsyCrossGuestFrameSmokeStatus::missing_graphics_context;
+    return result;
+  }
+
+  std::unique_ptr<game::GameplaySession> gameplay;
+  try {
+    gameplay = std::make_unique<game::GameplaySession>(mission);
+  } catch (...) {
+    result.status =
+        PsyCrossGuestFrameSmokeStatus::initial_presentation_invalid;
+    return result;
+  }
+
+  auto frame = gameplay->legacyPresentationFrame();
+  if (!frame || gameplay->runtimeFaulted() ||
+      !game::legacyPresentationFrameConsumable(*frame, 0U)) {
+    result.status = gameplay->runtimeFaulted()
+                        ? PsyCrossGuestFrameSmokeStatus::guest_runtime_fault
+                        : PsyCrossGuestFrameSmokeStatus::
+                              initial_presentation_invalid;
+    return result;
+  }
+
+  auto previous_sequence = frame->sequence;
+  for (auto update = std::uint32_t{1U};
+       update <= options.maximum_guest_updates; ++update) {
+    try {
+      gameplay->update(game::GameplayInput{});
+    } catch (...) {
+      result.status = PsyCrossGuestFrameSmokeStatus::guest_runtime_fault;
+      return result;
+    }
+    result.guest_updates = update;
+    if (gameplay->runtimeFaulted()) {
+      result.status = PsyCrossGuestFrameSmokeStatus::guest_runtime_fault;
+      return result;
+    }
+
+    frame = gameplay->legacyPresentationFrame();
+    if (!frame ||
+        !game::legacyPresentationFrameConsumable(*frame, previous_sequence)) {
+      result.status = PsyCrossGuestFrameSmokeStatus::presentation_invalid;
+      return result;
+    }
+    previous_sequence = frame->sequence;
+    result.presentation_sequence = frame->sequence;
+    result.guest_frame = frame->guest_frame;
+    result.fade_intensity = gameplay->mapFade();
+    result.presentation_models = gameplay->presentationModels().size();
+    result.active_objects = gameplay->activeObjects().size();
+    result.coherent_presentation = true;
+    result.visibility_threshold_met =
+        result.fade_intensity <= options.maximum_fade_intensity &&
+        hasVisibleGuestSource(*gameplay, *frame);
+    if (result.visibility_threshold_met) {
+      break;
+    }
+  }
+  if (!result.visibility_threshold_met) {
+    result.status = PsyCrossGuestFrameSmokeStatus::visibility_timeout;
+    return result;
+  }
+
+  // Reset caller residue so the three reported GL errors belong only to this
+  // bounded presentation, readback and present transaction.
+  static_cast<void>(drainFirstGlError());
+  detail::configurePsyCrossVideoMode(detail::gameplay_video_mode, true);
+
+  PADRAW pad{};
+  game::RetailCheatState cheats{};
+  detail::PsyCrossSceneViewer scene_viewer{
+      defaultKeyboardMouseBindings(), cheats,
+      game::CampaignDifficulty::original, {}, false, {}, false};
+  detail::SceneViewerResult viewer_result;
+  try {
+    viewer_result = scene_viewer.run(
+        mission, pad, 0xffffU, std::filesystem::path{},
+        mission.definition().index, std::move(gameplay), {},
+        detail::SceneViewerRunOptions{
+            .present_preloaded_frame_once = true,
+            .expected_sequence = result.presentation_sequence,
+            .expected_guest_frame = result.guest_frame,
+            .before_end_scene = [&result](
+                                    const detail::SceneFrameSubmission
+                                        &submission) {
+              captureGuestFrameEvidence(submission, result);
+            },
+        });
+  } catch (...) {
+    // Safe when no scene is active and necessary when drawing/readback threw
+    // after DrawOTag opened the bounded presentation.
+    PsyX_EndScene();
+    result.present_gl_error = drainFirstGlError();
+    result.status = PsyCrossGuestFrameSmokeStatus::renderer_rejected;
+    return result;
+  }
+  result.present_gl_error = drainFirstGlError();
+
+  if (viewer_result.reason !=
+          detail::SceneExitReason::bounded_presentation_complete ||
+      !result.observer_called || result.draw_framebuffer == 0U ||
+      result.submitted_primitives == 0U) {
+    result.status = PsyCrossGuestFrameSmokeStatus::renderer_rejected;
+    return result;
+  }
+  if (result.framebuffer_status != GL_FRAMEBUFFER_COMPLETE) {
+    result.status = PsyCrossGuestFrameSmokeStatus::framebuffer_incomplete;
+    return result;
+  }
+  if (result.readback_gl_error != 0U || result.viewport_width <= 0 ||
+      result.viewport_height <= 0 || result.pixel_count == 0U) {
+    result.status = PsyCrossGuestFrameSmokeStatus::readback_failed;
+    return result;
+  }
+  if (result.renderer_gl_error != 0U || result.present_gl_error != 0U) {
+    result.status = PsyCrossGuestFrameSmokeStatus::renderer_rejected;
+    return result;
+  }
+  if (result.opaque_pixel_count == 0U ||
+      result.nonuniform_pixel_count == 0U || result.unique_rgb_buckets < 2U ||
+      result.maximum_luminance <= result.minimum_luminance) {
+    result.status = PsyCrossGuestFrameSmokeStatus::pixel_evidence_rejected;
+    return result;
+  }
+
+  result.status = PsyCrossGuestFrameSmokeStatus::success;
+  return result;
 }
 
 } // namespace sf::platform
