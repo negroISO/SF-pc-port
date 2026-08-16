@@ -2,181 +2,154 @@
 
 ## Updated
 
-2026-08-15 21:23 CDT
+2026-08-15 22:31 CDT
 
 ## Workspace
 
-`/Volumes/iPhone/PS1_Rrecomps/SF1` on branch `ios-port`; HEAD and
-`origin/ios-port` are `84833b8`. The dedicated renderer smoke target and the
-iOS-only PsyCross scene bridge are implemented, independently reviewed,
-runtime-verified as a narrow renderer checkpoint, committed, and pushed.
+`/Volumes/iPhone/PS1_Rrecomps/SF1`, branch `ios-port`. Public `origin` is
+`https://github.com/negroISO/SF-pc-port.git`; never commit retail media,
+derived retail data, device/signing identifiers, credentials, or anything under
+`out/`/`tmp/`.
+
+Current public HEAD is `1489d7d`. The SPU stack fix, SDL2 scene backport, and
+bounded iOS external-disc boot action are independently reviewed, verified,
+committed, and pushed.
 
 ## Current status
 
-- Portable CUE/BIN folder discovery now validates one top-level CUE and its
-  in-place companion BIN without copying media into the app sandbox.
-- The iOS host presents a Files folder picker, retains a balanced security scope,
-  saves an iOS minimal bookmark, coordinates preflight reads, and retains the CUE
-  URL only while the directory lease is active.
-- The iOS host discovers extended GameController devices and probes the intended
-  PS1 mapping for MFi-compatible Xbox, DualShock 4, DualSense, and generic
-  extended controllers. This native bridge is bootstrap diagnostics only; SDL2
-  must own the final gameplay input path.
-- The updated host builds, signs, installs, launches, and remains alive over Wi-Fi
-  on the authorized iPhone 17 Pro Max. The visible UI reports no physical
-  controller currently connected and offers `Choose Disc Folder`.
-- The user has now selected the CUE/BIN folder on the physical phone after a USB
-  transfer. The device UI reports the CUE ready in its external folder and that
-  nothing was copied into the app. This is user-observed physical-device
-  verification. After force-quitting/reopening, the device still reports the CUE
-  ready, so security-scoped bookmark restoration is also user-verified. An agent
-  then used `devicectl --terminate-existing` to relaunch the installed app and
-  captured the same ready/no-copy state, independently verifying restoration.
-- Pinned iOS SDL2/OpenAL Soft/FFmpeg packaging and PsyCross GLES3 compile/link
-  portability checks pass and are pushed.
-- A distinct ROM-free `sf_ios_renderer_smoke` bundle now owns an iOS 27
-  `UIApplication`/`UIScene` lifecycle, attaches SDL2's UIKit window before GLES
-  context creation, and presents a deterministic RGB triangle through
-  `PsyX_BeginScene`/`PsyX_EndScene`.
-- The renderer itself passes on the iOS 27 iPhone 17 Pro Max Simulator and on
-  the USB-connected physical iPhone: GLES3 setup, deterministic pixel readback,
-  framebuffer completeness, presentation, and frame-120 heartbeat all pass.
-  The physical app used a distinct bundle ID, so it did not replace the
-  bootstrap app or its saved external-disc bookmark.
-- This checkpoint is not scene/orientation complete. A launch while the
-  Simulator device is portrait produces a portrait scene with the landscape
-  renderer rotated 90 degrees. Physical launch in landscape is visually
-  correct. Production SDL2 scene ownership/orientation is blocking before game
-  integration, not before this explicitly narrow renderer milestone.
-- At the user's request, the retail CUE/BIN pair was copied from the external
-  workspace into the currently installed Simulator app's `Documents/Ps1/`
-  folder for interactive testing. It was not opened, inspected, or committed.
+- The iOS bootstrap preserves a security-scoped bookmark to a user-selected
+  external Files/USB/iCloud folder. It validates exactly one top-level CUE and
+  its sibling BIN and does not copy either into the app sandbox.
+- A bounded `Run Mission 1 Boot Smoke` action now coordinates full access to the
+  retained directory/CUE/BIN, revalidates the same pair, opens the supported
+  build, loads Mission 1, constructs `LegacyFirstMissionRuntime`, validates its
+  initial frame, advances one host update with an empty pad, and requires a
+  fresh coherent presentation.
+- The smoke blocks while a replacement folder is validating, invalidates stale
+  green PASS status after disc-selection changes, and sanitizes parser failures
+  so provider paths are not written to shareable console/UI output.
+- Normal launches do not read retail media. `--sf-run-boot-smoke` is an explicit
+  operator-only launch argument and only runs after an already-authorized saved
+  folder becomes ready. It is not wired to CTest.
+- The original physical-device boot crash was reproduced and fixed. Pre-fix
+  `Spu::reset()` created a 594,512-byte arm64 stack frame from `*state_ = {};`.
+  Commit `fccd9a7` reconstructs `SpuState` directly in its heap allocation and
+  adds an exact-reset regression.
+- Final exact-source physical smoke passes at guest frame 1 / presentation
+  sequence 2. A profiled run reached that state in 191.188 ms; a clean
+  post-review run took 202.929 ms. A complete 15-second CPU Profiler trace
+  exported 1,566 samples. `R3000Runtime::step()` accounts for 50.74% of sampled
+  cycle weight and is the leading CPU optimization target.
+- The exact final source rebuilt for arm64 Simulator and signed arm64 device,
+  installed over the existing bundle, visually displayed PASS, and produced no
+  new crash report. The app remains launched on the connected phone at the PASS
+  screen.
+- Commit `e8c2803` tracks and pins the SDL2 2.32.10 iOS UIScene/orientation
+  backport. Fresh Simulator/device dependency builds and link smokes pass. Its
+  standalone Simulator GL lifecycle, orientation, background/foreground, and
+  teardown smokes pass without the prior no-scene assertion.
+- The ROM-free PsyCross renderer checkpoint remains pushed in `84833b8` and
+  previously passed on Simulator and physical iPhone. The bootstrap/guest smoke
+  does not yet connect that renderer to guest presentation data.
+- The native GameController diagnostic bridge recognizes the intended extended
+  MFi-compatible Xbox/DualShock/DualSense mapping. Final gameplay input must be
+  owned by SDL2; no real physical controller has been tested yet.
 
 ## Verified evidence
 
-- Native macOS suite: 24/24 CTest tests passed, including synthetic disc-folder
-  fixtures:
-  `tmp/validation/2026-08-15-disc-controller-combined/macos-full-ctest.log`.
-- Simulator Debug build and visual folder-picker/UI smoke:
-  `tmp/validation/2026-08-15-external-disc/`.
-- Simulator GameController synthetic mapping smoke: A/Cross + L2 + D-pad Up and
-  quantized axes passed with mask `0x4110`:
-  `tmp/validation/2026-08-15-gamecontroller/simulator-controller-fixed.log`.
-- The requested Simulator `Documents/Ps1/` copy was repeated atomically; source
-  and destination sizes match for both files. The app relaunched and visibly
-  restored the CUE as ready:
-  `tmp/validation/2026-08-15-simulator-retail-disc-copy/user-request-recopy/`.
-- Signed device Release build:
-  `tmp/validation/2026-08-15-disc-controller-device/ios-device-signed-build-rerun.log`.
-- Signed product verification, install/launch/process/crash queries, and physical
-  UI screenshot:
-  `tmp/validation/2026-08-15-disc-controller-device/`.
-  `iphone17promax-disc-controller-ui-landscape-readable.png` is the visually
-  inspected orientation-correct copy. The app remained running and no matching
-  device crash log was present.
-- User-observed physical Files-folder smoke: after transferring the pair by USB
-  and selecting its folder, the app reported the CUE ready and explicitly
-  reported no app-local copy. It remained ready after force-quit/relaunch,
-  verifying bookmark restoration at the UI level. No retail media was read or
-  captured by an agent.
-- Agent-captured physical bookmark-restoration smoke: `devicectl` terminated and
-  relaunched the installed app, then captured the visible ready/no-copy state:
-  `tmp/validation/2026-08-15-physical-disc-bookmark-user-confirmed/physical-cue-ready-agent-captured-readable.png`.
-- Final pre-renderer checkpoint: macOS build passed with the documented
-  warnings-as-errors exception, 24/24 CTest passed, iOS Simulator Debug and
-  iphoneos Release shell builds passed, the complete pinned dependency matrix
-  rebuilt and link-validated, and PsyCross force-link rechecks passed for both
-  mobile platforms. Evidence:
-  `tmp/validation/2026-08-15-pre-renderer-checkpoint/`.
-- The initial renderer launch failure is preserved and diagnosed: SDL2 2.32.10's
-  legacy `SDL_UIKitRunApp` path trapped in
-  `UIApplicationEvaluateRuntimeIssueForNoSceneLifecycleAdoption` on iOS 27.
-  The user-provided crash report is
-  `tmp/validation/2026-08-15-ios-renderer-smoke/SFRendererSmoke-Launch-Log.txt`.
-- Simulator renderer evidence is indexed by
-  `tmp/validation/2026-08-15-ios-renderer-smoke/README.md`: Release build,
-  scene attachment, GLES3 context, shader/program compilation, deterministic
-  pixel readback, complete FBO, presentation, frame-120 heartbeat, no new crash,
-  and visually inspected RGB-triangle screenshots. The final post-review run
-  also proves `scene_active` precedes frame 1 and that termination returns exit
-  code 0, but its portrait-launch screenshot exposes the known 90-degree scene
-  orientation failure. The current macOS suite also passes 24/24 tests and the
-  iOS-only bridge does not leak into the desktop PsyCross archive.
-- Passing physical renderer evidence is under
-  `tmp/validation/2026-08-15-physical-renderer-smoke/`, with the current
-  post-review run indexed in `post-review-paused-start/README.md`: signed
-  Release build, install/launch over verified wired USB, Apple A19 Pro GLES3
-  context, `scene_active` before rendering, deterministic readback and frame-1
-  presentation PASS, frame-120 heartbeat, a visually inspected orientation-
-  correct 2868x1320 RGB triangle, graceful exit code 0, and zero matching crash
-  reports. Both the bootstrap and distinct smoke bundles remain installed.
-- Scratch-only full iOS backend compile/link audit passes for arm64 Simulator
-  and iphoneos with SDL2, OpenAL, FFmpeg, PsyCross, all portable libraries, and
-  all 11 backend objects. It was intentionally not launched because the scratch
-  binary has no scene owner. Evidence and the exact required CMake delta are in
-  `tmp/validation/2026-08-15-ios-game-smoke-link-audit/README.md`.
+All evidence stays ignored on the external volume.
+
+### SPU fix
+
+- `tmp/validation/2026-08-15-spu-stack-reset/README.md`
+- exact pre-fix arm64 frame: 594,512 bytes
+- fixed Release/Debug arm64 frames: 48/32 bytes
+- focused SPU stack-limit smokes: PASS
+- macOS build + CTest: 24/24 PASS
+
+### Bounded boot — Simulator
+
+- `tmp/validation/2026-08-15-bounded-game-boot-smoke/README.md`
+- Debug build/install/auto-run: PASS
+- guest frame 1 / sequence 2 coherent: PASS
+- visually inspected green PASS screenshot: PASS
+
+### Bounded boot — physical device
+
+- `tmp/validation/2026-08-15-physical-bounded-game-boot-smoke/README.md`
+- original `.ips` preserves the `___chkstk_darwin -> Spu::reset()` crash
+- final signed Release build/install/launch: PASS
+- exact-final profiled run: 191.188 ms through guest frame 1
+- complete `final-reviewed-boot-cpu.trace`: PASS; 1,566 exported CPU rows
+- final readable screenshot: visually inspected PASS
+- post-run crash query: zero new reports
+
+### SDL2 scene backport
+
+- `tmp/validation/2026-08-15-sdl-scene-production-audit/README.md`
+- tracked patch SHA-256:
+  `d4a047bb8edc8852a46bd3b6584409d9badb568e372e440584bf30e9e2b32ea5`
+- fresh arm64 Simulator/device dependency rebuild + link smoke: PASS
+- Simulator scene/GL/orientation/lifecycle/teardown smoke: PASS
+- independent review: approved for the intended single-scene fullscreen iPhone
+  path with minimum iOS 17
+
+### Root integration checks
+
+- `tmp/validation/2026-08-15-final-integration/macos-build-ctest.log`:
+  24/24 PASS
+- `tmp/validation/2026-08-15-final-integration/ios-shell-builds.log`:
+  Simulator Debug and iphoneos Release shell builds PASS
+- `tmp/validation/2026-08-15-final-integration/diff-script-security-check.log`:
+  diff/shell/hash/verify-only checks PASS
+- independent final source/public-safety review: APPROVE
 
 ## Not yet verified
 
-- The Simulator-only app-sandbox copy will be deleted if that Simulator app is
-  uninstalled; it is not the production persistence design.
-- USB-C or Bluetooth input from a physical Xbox/PlayStation/MFi controller. The
-  device currently reports no extended controller; mapping is synthetic only.
-- SDL-owned input from a real controller, audio, FMV, retail guest/game boot,
-  and gameplay.
-- The RGB triangle proves the SDL/PsyCross GLES context, native framebuffer,
-  presentation boundary, and lifecycle bridge. It does not yet exercise the
-  real LIBGPU textured/alpha/depth primitive variants or the guest interpreter.
-- Correct orientation when the app is launched from a portrait scene. The
-  current Simulator screenshot is intentionally retained as failing evidence.
+- Continuous gameplay, guest-driven drawing, frame pacing, touch controls, saves,
+  pause/resume during active gameplay, or mission progression.
+- Real USB-C/Bluetooth Xbox, DualShock 4, DualSense, or other MFi controller
+  through SDL2's final gameplay path.
+- Audio, XA playback, FMV video, interruptions, route changes, or audible output.
+- A Metal gameplay renderer. The current ROM-free renderer uses deprecated
+  OpenGL ES/PsyCross as a bring-up bridge.
+- Physical-device runtime of the exact standalone SDL scene harness, iOS 17
+  runtime, external displays, multiple/reconnected scenes, or cold URL delivery.
 
-## Known issues
+## Known limitations
 
-- AppleClang warnings remain in upstream code; bring-up presets set
-  `SF_WARNINGS_AS_ERRORS=OFF`.
-- Signing remains disabled by default. A separate ignored build tree uses the
-  user's local automatic signing settings; do not record them in source or docs.
-- OpenGL ES is deprecated on iOS. The GLES3 path is now runtime-validated as a
-  bring-up bridge; the production renderer still needs a Metal backend.
-- SDL2 2.32.10 emits two unbalanced UIKit appearance-transition warnings when
-  its legacy window is attached to the active scene. More importantly, a
-  portrait-launch Simulator scene retains portrait geometry and displays the
-  landscape render rotated 90 degrees. Rendering/readback remains stable, but
-  this bridge is not production-correct. Backport SDL3-style scene support and
-  prove orientation before any game-integration claim.
-- The full PsyCross backend's desktop CMake path still requires iOS-specific
-  OpenGLES, FFmpeg static-import, and `Threads::Threads` handling before a
-  tracked game-smoke target can configure normally.
-- The final controller path must be `GCController -> SDL2 iOS backend ->
-  SDL_GameController -> PsyCross/portable input`; disable the native diagnostic
-  bridge once SDL owns controller handlers.
+- The bounded smoke deliberately advances only one guest host update and then
+  destroys the temporary runtime. It is proof of boot/presentation coherence,
+  not a playable port.
+- The tracked SDL patch targets a single fullscreen application scene. Custom
+  `UIApplicationMain` hosts must use SDL's wrapper or forward/dedupe callbacks;
+  external display and multi-scene routing remain unsupported.
+- AppleClang emits existing defaulted-comparison warnings in legacy bridge
+  types; bring-up presets keep warnings-as-errors disabled.
+- Signing is disabled by default. Local automatic-signing settings live only in
+  ignored build/evidence trees.
 
 ## Next steps
 
-1. Backport the audited SDL2 UIScene/window lifecycle changes, fix and visually
-   prove portrait-to-landscape negotiation, then use that production scene owner
-   for game integration.
-2. Apply the proven iOS full-backend dependency/CMake split and add a distinct
-   scene-aware game-smoke bundle.
-3. Add a ROM-free PsyCross/LIBGPU textured/alpha/depth primitive smoke before
-   reading retail media.
-4. Add a bounded, interactive external-CUE boot smoke: retain/freeze the folder
-   lease, coordinate full CUE+BIN contents, verify the supported build, load the
-   first mission, bootstrap the guest, and render one coherent frame without
-   copying media.
-5. Refactor blocking host loops into lifecycle-driven steps before continuous
-   gameplay; then test a real MFi-compatible controller, audio, FMV, and resume.
+1. Apply the proven full iOS backend CMake split and use the patched SDL scene
+   owner for a distinct guest game-smoke bundle.
+2. Feed the bounded coherent presentation into the verified PsyCross renderer;
+   visually validate guest primitives before adding a lifecycle-driven loop.
+3. Profile continuous execution. Start with the R3000 interpreter step/pump hot
+   path identified by the physical CPU trace; optimize only against comparable
+   traces and deterministic tests.
+4. Route SDL game-controller input into the portable pad state, then physically
+   smoke Xbox/PlayStation/MFi USB-C and Bluetooth controllers.
+5. Add OpenAL audio/XA and FFmpeg FMV smokes, then design the production Metal
+   backend rather than treating OpenGL ES as the final renderer.
 
 ## Pushed milestones
 
-- `be5bc53` — persistent iOS disc and controller bootstrap.
-- `4b434ce` — pinned iOS SDL2/OpenAL Soft/FFmpeg dependency bootstrap.
-- `625320b` — PsyCross iOS GLES portability and link plumbing.
-- `84833b8` — ROM-free iOS PsyCross renderer smoke checkpoint.
-
-## Git policy
-
-- Public fork: `https://github.com/negroISO/SF-pc-port.git`
-- Upstream: `https://github.com/Madxbio97/SF-pc-port.git`
-- Never commit ROMs, retail-derived data, `out/`, `tmp/`, credentials, signing
-  identities, device identifiers, or provisioning material.
+- `be5bc53` — persistent iOS disc and controller bootstrap
+- `4b434ce` — pinned iOS SDL2/OpenAL Soft/FFmpeg dependency bootstrap
+- `625320b` — PsyCross iOS GLES portability and link plumbing
+- `84833b8` — ROM-free iOS PsyCross renderer smoke checkpoint
+- `bf51e50` — renderer handoff
+- `fccd9a7` — SPU reset stack-overflow fix
+- `e8c2803` — SDL2 iOS scene lifecycle backport
+- `1489d7d` — bounded iOS external-disc guest boot smoke
