@@ -2,14 +2,14 @@
 
 ## Updated
 
-2026-08-15 21:18 CDT
+2026-08-15 21:23 CDT
 
 ## Workspace
 
 `/Volumes/iPhone/PS1_Rrecomps/SF1` on branch `ios-port`; HEAD and
-`origin/ios-port` are `625320b`. The dedicated renderer smoke target and the
+`origin/ios-port` are `84833b8`. The dedicated renderer smoke target and the
 iOS-only PsyCross scene bridge are implemented, independently reviewed,
-runtime-verified as a narrow renderer checkpoint, and pending commit/push.
+runtime-verified as a narrow renderer checkpoint, committed, and pushed.
 
 ## Current status
 
@@ -153,20 +153,18 @@ runtime-verified as a narrow renderer checkpoint, and pending commit/push.
 
 ## Next steps
 
-1. Stage only renderer source/docs, commit the narrowly named renderer
-   checkpoint with its explicit orientation failure, and push `ios-port`.
-2. Backport the audited SDL2 UIScene/window lifecycle changes, fix and visually
+1. Backport the audited SDL2 UIScene/window lifecycle changes, fix and visually
    prove portrait-to-landscape negotiation, then use that production scene owner
    for game integration.
-3. Apply the proven iOS full-backend dependency/CMake split and add a distinct
+2. Apply the proven iOS full-backend dependency/CMake split and add a distinct
    scene-aware game-smoke bundle.
-4. Add a ROM-free PsyCross/LIBGPU textured/alpha/depth primitive smoke before
+3. Add a ROM-free PsyCross/LIBGPU textured/alpha/depth primitive smoke before
    reading retail media.
-5. Add a bounded, interactive external-CUE boot smoke: retain/freeze the folder
+4. Add a bounded, interactive external-CUE boot smoke: retain/freeze the folder
    lease, coordinate full CUE+BIN contents, verify the supported build, load the
    first mission, bootstrap the guest, and render one coherent frame without
    copying media.
-6. Refactor blocking host loops into lifecycle-driven steps before continuous
+5. Refactor blocking host loops into lifecycle-driven steps before continuous
    gameplay; then test a real MFi-compatible controller, audio, FMV, and resume.
 
 ## Pushed milestones
@@ -174,6 +172,7 @@ runtime-verified as a narrow renderer checkpoint, and pending commit/push.
 - `be5bc53` — persistent iOS disc and controller bootstrap.
 - `4b434ce` — pinned iOS SDL2/OpenAL Soft/FFmpeg dependency bootstrap.
 - `625320b` — PsyCross iOS GLES portability and link plumbing.
+- `84833b8` — ROM-free iOS PsyCross renderer smoke checkpoint.
 
 ## Git policy
 
