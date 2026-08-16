@@ -15,8 +15,8 @@ derived retail data, device/signing identifiers, credentials, or anything under
 The SDL-owned renderer milestone is committed and pushed as `c292495`. The
 full guest-renderer checkpoint is committed and pushed as `f348406` and remains
 isolated on the feature branch. Its physical-device gate now passes after the
-verified presentation-clock fix described below; do not merge to `ios-port`
-without an explicit review/merge decision.
+verified presentation-clock fix committed as `900009c`; do not merge to
+`ios-port` without an explicit review/merge decision.
 
 ## Current status
 
@@ -176,7 +176,8 @@ All evidence stays ignored on the external volume.
 - Simulator async no-media and synthetic three-intent paths: PASS
 - same-ID Simulator data preservation probe: PASS
 - independent async coordination/lifetime/public-log review: APPROVE
-- physical install: PASS; launch/render: BLOCKED — DEVICE LOCKED
+- original physical install: PASS; launch/render: BLOCKED — DEVICE LOCKED
+  (superseded by the resumed physical evidence below)
 - physical signed bootstrap reinstall + container access: PASS
 
 ### Guest renderer — resumed physical device
@@ -248,3 +249,4 @@ All evidence stays ignored on the external volume.
 - `1489d7d` — bounded iOS external-disc guest boot smoke
 - `c292495` — SDL-owned iOS renderer scene conversion
 - `f348406` — bounded iOS guest renderer smoke checkpoint; physical runtime pending
+- `900009c` — advance gameplay presentation clock; physical guest render PASS
