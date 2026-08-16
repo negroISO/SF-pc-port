@@ -154,6 +154,26 @@ struct PsyCrossGuestLoopFrame {
   double interval_ms{};
 };
 
+struct PsyCrossGuestControllerSample {
+  bool connected{};
+  std::int32_t instance_id{-1};
+  std::uint8_t controller_type{};
+  std::string name;
+  // Active-low PADRAW button bitmask: a zero bit means the button is held.
+  std::uint16_t buttons{0xffffU};
+  std::array<std::uint8_t, 4U> analog{128U, 128U, 128U, 128U};
+  double move{};
+  double turn{};
+  double strafe{};
+  bool aim{};
+  bool fire{};
+  bool interact{};
+  double player_x{};
+  double player_y{};
+  double player_z{};
+  int player_yaw{};
+};
+
 struct PsyCrossGuestLoopSmokeOptions {
   // Twenty presentations per second of guest time. Six hundred presentations
   // are thirty seconds of continuous paced execution, enough for the smoke to
@@ -179,6 +199,13 @@ struct PsyCrossGuestLoopSmokeOptions {
   // enter-background and false on enter-foreground.
   std::function<void(bool background, std::uint32_t presentation_index)>
       lifecycle_event;
+  // When true, each guest update samples the physical SDL game controller
+  // through the PsyX pad and feeds the mapped portable input into the guest.
+  // The smoke registers its own pad buffer for the loop.
+  bool sample_controller{};
+  // Optional observer invoked once per presentation while sampling.
+  std::function<void(const PsyCrossGuestControllerSample &)>
+      controller_observer;
 };
 
 struct PsyCrossGuestLoopSmokeResult {

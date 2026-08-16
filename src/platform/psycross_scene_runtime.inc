@@ -1196,6 +1196,8 @@ SceneViewerResult PsyCrossSceneViewer::run(
     auto loop_presentation_invalid = false;
     auto presentations_completed = 0U;
     auto previous_consumed_sequence = std::uint64_t{};
+    sf::platform::PlayerInputMapper controller_input_mapper{
+        sf::platform::PlayerInputConfiguration{}};
     PsyX_Log_Info("Continuous guest loop start: presentations=%u "
                   "update_interval_ms=%.1f\n",
                   loop_options.presentation_count,
@@ -1231,6 +1233,18 @@ SceneViewerResult PsyCrossSceneViewer::run(
         case SDL_APP_TERMINATING:
           terminated = true;
           break;
+        case SDL_CONTROLLERDEVICEADDED:
+        case SDL_JOYDEVICEADDED:
+        case SDL_CONTROLLERDEVICEREMOVED:
+        case SDL_JOYDEVICEREMOVED:
+        case SDL_CONTROLLERDEVICEREMAPPED:
+          // PsyX owns controller hot-plug handling. Return the event to the
+          // queue so PsyX_UpdateInput's poll can forward it to the pad layer
+          // later in this same iteration.
+          if (loop_options.sample_controller) {
+            SDL_PushEvent(&event);
+          }
+          break;
         default:
           break;
         }
@@ -1261,13 +1275,166 @@ SceneViewerResult PsyCrossSceneViewer::run(
       simulation_accumulator_seconds = std::min(
           simulation_accumulator_seconds + elapsed_seconds,
           retail_simulation_step_seconds * maximum_backlog_updates);
+      // Optional physical-controller sampling. This mirrors the controller
+      // branch of the ordinary loop's mapping (pad bits, stick layout and
+      // action buttons) without the keyboard/mouse path, movement arming or
+      // pause handling, then feeds the mapped portable input to the guest.
+      auto sampled_gameplay_input = game::GameplayInput{};
+      auto controller_sample = detail::SceneControllerSample{};
+      if (loop_options.sample_controller) {
+        PsyX_UpdateInput();
+        PsyXControllerSnapshot controller_snapshot{};
+        static_cast<void>(
+            PsyX_Pad_GetControllerSnapshot(0, &controller_snapshot));
+        auto controller_buttons = std::uint16_t{0xffffU};
+        if (controller_snapshot.connected != 0U) {
+          controller_buttons = static_cast<std::uint16_t>(
+              static_cast<std::uint16_t>(controller_snapshot.buttons[0]) |
+              (static_cast<std::uint16_t>(controller_snapshot.buttons[1])
+               << 8U));
+        }
+        const auto controller_held =
+            static_cast<std::uint16_t>(~controller_buttons);
+        const auto controller_analog = std::array<unsigned char, 4U>{
+            pad.analog[0], pad.analog[1], pad.analog[2], pad.analog[3]};
+        const auto controller_sticks = game::controllerStickAxes(
+            pause_settings_.bindings.stick_layout, controller_analog[2],
+            controller_analog[3], controller_analog[0], controller_analog[1]);
+        const auto analog_x =
+            static_cast<int>(controller_sticks.character_horizontal) - 128;
+        const auto analog_y =
+            static_cast<int>(controller_sticks.character_vertical) - 128;
+        const auto analog_move =
+            -normalizedAnalogAxis(analog_y, analog_deadzone);
+        const auto analog_turn =
+            normalizedAnalogAxis(analog_x, analog_deadzone);
+        const auto digital_forward = (controller_held & up_button) != 0U;
+        const auto digital_backward = (controller_held & down_button) != 0U;
+        const auto digital_left = (controller_held & left_button) != 0U;
+        const auto digital_right = (controller_held & right_button) != 0U;
+        const auto action_button = [&](game::ControllerAction action) {
+          return static_cast<std::uint16_t>(
+              game::controllerButtonForAction(pause_settings_, action));
+        };
+        sf::platform::RawPlayerInput raw_player_input;
+        raw_player_input.controller.left_y =
+            digital_forward != digital_backward
+                ? digital_forward ? 1.0 : -1.0
+                : analog_move;
+        raw_player_input.controller.left_x =
+            digital_left != digital_right ? digital_left ? -1.0 : 1.0
+                                          : analog_turn;
+        raw_player_input.controller.right_x = normalizedAnalogAxis(
+            static_cast<int>(controller_sticks.camera_horizontal) - 128, 0);
+        raw_player_input.controller.right_y = -normalizedAnalogAxis(
+            static_cast<int>(controller_sticks.camera_vertical) - 128, 0);
+        raw_player_input.controller.aim =
+            (controller_held &
+             action_button(game::ControllerAction::aim)) != 0U;
+        raw_player_input.controller.fire =
+            (controller_held &
+             action_button(game::ControllerAction::shoot)) != 0U;
+        raw_player_input.controller.roll =
+            (controller_held &
+             action_button(game::ControllerAction::roll_zoom_out)) != 0U;
+        raw_player_input.controller.kneel =
+            (controller_held &
+             action_button(game::ControllerAction::kneel)) != 0U;
+        raw_player_input.controller.interact =
+            (controller_held &
+             action_button(game::ControllerAction::use_zoom_in)) != 0U;
+        raw_player_input.controller.reload =
+            (controller_held &
+             action_button(game::ControllerAction::use_zoom_in)) != 0U;
+        raw_player_input.controller.target_lock =
+            (controller_held &
+             action_button(game::ControllerAction::target_lock)) != 0U;
+        raw_player_input.controller.run =
+            raw_player_input.controller.left_y >= controller_run_threshold;
+        const auto selecting_weapon =
+            (controller_held &
+             action_button(game::ControllerAction::change_weapon)) != 0U;
+        raw_player_input.controller.strafe_left =
+            !selecting_weapon &&
+            (controller_held &
+             action_button(game::ControllerAction::step_left)) != 0U;
+        raw_player_input.controller.strafe_right =
+            !selecting_weapon &&
+            (controller_held &
+             action_button(game::ControllerAction::step_right)) != 0U;
+        raw_player_input.controller.previous_weapon =
+            selecting_weapon &&
+            (controller_held &
+             action_button(game::ControllerAction::step_left)) != 0U;
+        raw_player_input.controller.next_weapon =
+            selecting_weapon &&
+            (controller_held &
+             action_button(game::ControllerAction::step_right)) != 0U;
+        const auto mapped_input =
+            controller_input_mapper.update(raw_player_input);
+        const auto manual_aim = mapped_input.aim.held;
+        const auto first_person_input =
+            sf::platform::firstPersonAimInput(mapped_input);
+        sampled_gameplay_input = game::GameplayInput{
+            .move = mapped_input.move_forward,
+            .turn = manual_aim ? 0.0 : mapped_input.turn,
+            .run = mapped_input.run.held,
+            .aim = manual_aim,
+            .next_weapon = mapped_input.next_weapon.pressed,
+            .previous_weapon = mapped_input.previous_weapon.pressed,
+            .quick_weapon = mapped_input.quick_weapon.pressed,
+            .strafe = mapped_input.move_strafe,
+            .look_yaw = manual_aim
+                            ? first_person_input.directional_look_per_guest_tick
+                                  .yaw
+                            : 0.0,
+            .look_pitch =
+                manual_aim
+                    ? -first_person_input.directional_look_per_guest_tick.pitch
+                    : 0.0,
+            .fire_pressed = mapped_input.fire.pressed,
+            .fire_held = mapped_input.fire.held,
+            .roll = mapped_input.roll.held,
+            .reload = mapped_input.reload.held,
+            .kneel = mapped_input.kneel.held,
+            .interact = mapped_input.interact.held,
+            .target_lock = mapped_input.target_lock.pressed,
+            .target_lock_held = mapped_input.target_lock.held,
+            .target_lock_released = mapped_input.target_lock.released,
+            .quick_turn = mapped_input.quick_turn.pressed,
+            .weapon_menu_delta = mapped_input.weapon_menu_delta,
+        };
+        const char *controller_name = "";
+        if (controller_snapshot.connected != 0U) {
+          auto *joystick =
+              SDL_JoystickFromInstanceID(controller_snapshot.instanceId);
+          if (joystick != nullptr) {
+            controller_name = SDL_JoystickName(joystick);
+          }
+        }
+        controller_sample = detail::SceneControllerSample{
+            .connected = controller_snapshot.connected != 0U,
+            .instance_id = controller_snapshot.instanceId,
+            .controller_type = static_cast<std::uint8_t>(
+                controller_snapshot.type),
+            .name = controller_name ? controller_name : "",
+            .buttons = controller_buttons,
+            .analog = controller_analog,
+            .move = sampled_gameplay_input.move,
+            .turn = sampled_gameplay_input.turn,
+            .strafe = sampled_gameplay_input.strafe,
+            .aim = sampled_gameplay_input.aim,
+            .fire = sampled_gameplay_input.fire_held,
+            .interact = sampled_gameplay_input.interact,
+        };
+      }
       auto updates_this_presentation = 0U;
       while (updates_this_presentation < maximum_updates_per_presentation &&
              simulation_accumulator_seconds + 1.0e-9 >=
                  retail_simulation_step_seconds) {
         std::swap(previous_render_presentation, current_render_presentation);
         previous_weapon_switch_countdown = current_weapon_switch_countdown;
-        gameplay.update(game::GameplayInput{});
+        gameplay.update(sampled_gameplay_input);
         current_weapon_switch_countdown = gameplay.hud().weaponSwitchFrames();
         weapon_presentation_edges.observe(
             gameplay.legacyPresentationFrame());
@@ -1291,6 +1458,14 @@ SceneViewerResult PsyCrossSceneViewer::run(
       }
       if (loop_fault) {
         break;
+      }
+      if (loop_options.sample_controller &&
+          loop_options.controller_observer) {
+        controller_sample.player_x = gameplay.player().x;
+        controller_sample.player_y = gameplay.player().y;
+        controller_sample.player_z = gameplay.player().z;
+        controller_sample.player_yaw = gameplay.player().yaw;
+        loop_options.controller_observer(controller_sample);
       }
       const auto frame = gameplay.legacyPresentationFrame();
       if (!frame ||

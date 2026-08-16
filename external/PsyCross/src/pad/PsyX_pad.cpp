@@ -546,18 +546,29 @@ static void PsyX_Pad_AssignAvailableControllers(void)
 {
 	// SDL device indices are compacted after removal. Scan the current list in
 	// index order so a previously unassigned controller is promoted
-	// deterministically when a slot becomes free.
+	// deterministically when a slot becomes free. Game-controller devices are
+	// assigned first so a physical controller is never displaced by a
+	// joystick-only device such as the iOS accelerometer. Explicit
+	// controller-to-slot mappings in PsyX_Pad_SelectSlot still win first.
 	const int numJoysticks = SDL_NumJoysticks();
-	for (int deviceIndex = 0; deviceIndex < numJoysticks; ++deviceIndex)
+	for (int pass = 0; pass < 2; ++pass)
 	{
-		const SDL_JoystickID instanceId =
-			SDL_JoystickGetDeviceInstanceID(deviceIndex);
-		if (instanceId < 0 || PsyX_Pad_FindSlotByInstanceId(instanceId) >= 0)
-			continue;
+		const bool preferGameControllers = pass == 0;
+		for (int deviceIndex = 0; deviceIndex < numJoysticks; ++deviceIndex)
+		{
+			if (preferGameControllers !=
+			    (SDL_IsGameController(deviceIndex) == SDL_TRUE))
+				continue;
 
-		const int slot = PsyX_Pad_SelectSlot(deviceIndex);
-		if (slot >= 0)
-			PsyX_Pad_OpenController(deviceIndex, slot);
+			const SDL_JoystickID instanceId =
+				SDL_JoystickGetDeviceInstanceID(deviceIndex);
+			if (instanceId < 0 || PsyX_Pad_FindSlotByInstanceId(instanceId) >= 0)
+				continue;
+
+			const int slot = PsyX_Pad_SelectSlot(deviceIndex);
+			if (slot >= 0)
+				PsyX_Pad_OpenController(deviceIndex, slot);
+		}
 	}
 }
 
@@ -617,9 +628,20 @@ int PsyX_Pad_InitSystem(void)
 	g_padOutputFocused = true;
 
 	PsyX_Pad_DebugListControllers();
+	// Two passes: game-controller devices take the primary slots ahead of
+	// joystick-only devices (the iOS accelerometer enumerates as a joystick).
 	const int numJoysticks = SDL_NumJoysticks();
-	for (int deviceIndex = 0; deviceIndex < numJoysticks; ++deviceIndex)
-		PsyX_Pad_DeviceAdded(deviceIndex);
+	for (int pass = 0; pass < 2; ++pass)
+	{
+		const bool preferGameControllers = pass == 0;
+		for (int deviceIndex = 0; deviceIndex < numJoysticks; ++deviceIndex)
+		{
+			if (preferGameControllers !=
+			    (SDL_IsGameController(deviceIndex) == SDL_TRUE))
+				continue;
+			PsyX_Pad_DeviceAdded(deviceIndex);
+		}
+	}
 
 	return 1;
 }

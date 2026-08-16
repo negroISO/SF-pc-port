@@ -1578,6 +1578,12 @@ PsyCrossGuestLoopSmokeResult runPsyCrossGuestLoopSmoke(
   detail::configurePsyCrossVideoMode(detail::gameplay_video_mode, true);
 
   PADRAW pad{};
+  if (options.sample_controller) {
+    // Register the smoke's pad buffer so PsyX fills it from the bound
+    // physical controller, mirroring the scene host's setup.
+    PadInitDirect(reinterpret_cast<unsigned char *>(&pad), nullptr);
+    PadStartCom();
+  }
   game::RetailCheatState cheats{};
   detail::PsyCrossSceneViewer scene_viewer{
       defaultKeyboardMouseBindings(), cheats,
@@ -1669,7 +1675,7 @@ PsyCrossGuestLoopSmokeResult runPsyCrossGuestLoopSmoke(
                                                       last_captured_evidence);
                           }
                           if (options.per_presentation) {
-                            options.per_presentation(
+                              options.per_presentation(
                                 PsyCrossGuestLoopFrame{
                                     .presentation_index =
                                         loop_frame.presentation_index,
@@ -1685,7 +1691,7 @@ PsyCrossGuestLoopSmokeResult runPsyCrossGuestLoopSmoke(
                                     .presentation_ms =
                                         loop_frame.presentation_ms,
                                     .interval_ms = loop_frame.interval_ms,
-                                });
+                            });
                           }
                           return true;
                         },
@@ -1718,6 +1724,32 @@ PsyCrossGuestLoopSmokeResult runPsyCrossGuestLoopSmoke(
                           }
                           if (options.lifecycle_event) {
                             options.lifecycle_event(background, index);
+                          }
+                        },
+                    .sample_controller = options.sample_controller,
+                    .controller_observer =
+                        [&options](
+                            const detail::SceneControllerSample &sample) {
+                          if (options.controller_observer) {
+                            options.controller_observer(
+                                PsyCrossGuestControllerSample{
+                                    .connected = sample.connected,
+                                    .instance_id = sample.instance_id,
+                                    .controller_type = sample.controller_type,
+                                    .name = sample.name,
+                                    .buttons = sample.buttons,
+                                    .analog = sample.analog,
+                                    .move = sample.move,
+                                    .turn = sample.turn,
+                                    .strafe = sample.strafe,
+                                    .aim = sample.aim,
+                                    .fire = sample.fire,
+                                    .interact = sample.interact,
+                                    .player_x = sample.player_x,
+                                    .player_y = sample.player_y,
+                                    .player_z = sample.player_z,
+                                    .player_yaw = sample.player_yaw,
+                                });
                           }
                         },
                 },

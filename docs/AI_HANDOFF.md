@@ -324,3 +324,54 @@ All evidence stays ignored on the external volume.
 - `900009c` — advance gameplay presentation clock; physical guest render PASS
 - `519c9ce` — fix LP64 VRAM texture packing; clean physical raster PASS
 - `c5a5b5f` — record raster fix validation
+
+## INTERIM CHECKPOINT 2026-08-16 — controller smoke (milestone 2) mid-flight
+
+Branch `ios-guest-renderer-smoke`; the 7 modified files in the working tree ARE
+this milestone (NOT yet committed — commit after the physical PASS):
+
+- SDL game-controller input routing into the portable pad state: two-pass slot
+  assignment in `external/PsyCross/src/pad/PsyX_pad.cpp` (game controllers win
+  over the iOS accelerometer joystick), `SceneControllerSample` +
+  `sample_controller` in the viewer/runtime, `PsyCrossGuestControllerSample`
+  host bridge, `--sf-run-controller-smoke` in
+  `apps/sf_ios_guest_renderer_smoke/main.mm`.
+- Diagnostics added today (same file): `--sf-run-gc-probe` mode (pure idle
+  run loop, proves OS-level enumeration), `gc_runtime_bundle` (live
+  CFBundleIdentifier check), settle phase (15 s wait for async GameController
+  discovery before the loop), mid-loop `gc_window` discovery windows, and
+  NSRunLoopCommonModes yields. Rationale: the manual continuous loop does NOT
+  drain the GCD main queue (proven: dispatch_after re-polls only ran after the
+  loop ended), and SDL's iOS MFi driver receives controller connects on the
+  main queue.
+
+KEY FINDINGS:
+
+- App-side chain is CORRECT. The DualSense was observed twice via
+  `gc_probe`: `connect name=DualSense Wireless Controller category=DualSense`
+  within 0.5 s of launch. Runtime bundle id logs
+  `com.negroiso.syphonfilter.sf1` (forum "empty CFBundleIdentifier" failure
+  mode ruled out).
+- The blocker is the PAD'S SLEEP TIMER: every controller-smoke launch landed
+  in a sleep gap (15 s settle + full loop, zero connects); both probe launches
+  caught it awake and saw it instantly. Symptom: `gc_controllers count=0`,
+  `gc_settle waiting count=0`, no `gc_connect`, SDL lists only the iOS
+  accelerometer.
+
+NEXT ACTION: with the pad IN HAND and a button pressed to wake it, launch
+`--sf-run-controller-smoke --sf-loop-presentations 800` immediately (user
+should keep wiggling the left stick for the first 30 s). Expect `gc_connect`,
+then `controller_identity name=DualSense Wireless Controller`,
+`controller_buttons`, `controller_analog` changes and guest pose movement.
+Then: hot-plug check (disconnect/reconnect mid-run), bootstrap restore,
+commit + push, handoff rewrite, RAG master log + `sf1-ios-port` reindex.
+
+BUILD/RUN (device `1EED792C-F233-511F-8DBD-15A47EC570A3`, app
+`com.negroiso.syphonfilter.sf1`):
+
+- Signed build: `xcodebuild -project out/ios-device-guest-renderer-smoke-signed/SyphonFilterPC.xcodeproj -target sf_ios_guest_renderer_smoke -configuration Release -sdk iphoneos DEVELOPMENT_TEAM=72MB2RMPTC build`
+- Install + run: `xcrun devicectl device install app --device <UDID> out/.../SFGuestRendererSmoke.app` then `xcrun devicectl device process launch --device <UDID> --terminate-existing --console com.negroiso.syphonfilter.sf1 --sf-run-controller-smoke --sf-loop-presentations 800`
+
+UNRELATED: Z.ai GLM MCP (`zai-mcp-server`, `npx -y @z_ai/mcp-server`, env
+`Z_AI_API_KEY` + `Z_AI_MODE=ZAI`) was registered in
+`~/.reasonix/config.json` `mcpServers`; activates on next Reasonix launch.

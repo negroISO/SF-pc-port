@@ -232,6 +232,13 @@ add_executable(sf_tool
 )
 target_link_libraries(sf_tool PRIVATE sf::game)
 sf_set_project_warnings(sf_tool)
+# Xcode requires a bundle identifier on every target it builds, even plain
+# command-line tools; without one the generated scheme fails with "Bundle
+# identifier is missing" when Xcode builds the whole project.
+set_target_properties(sf_tool PROPERTIES
+    XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER
+        "com.negroiso.syphonfilter.sftool"
+)
 
 include(SfRomProbes)
 

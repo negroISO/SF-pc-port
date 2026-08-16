@@ -9,6 +9,7 @@ endif()
 
 find_library(SF_GUEST_SMOKE_FOUNDATION_FRAMEWORK Foundation REQUIRED)
 find_library(SF_GUEST_SMOKE_UIKIT_FRAMEWORK UIKit REQUIRED)
+find_library(SF_GUEST_SMOKE_GAMECONTROLLER_FRAMEWORK GameController REQUIRED)
 
 set(SF_IOS_GUEST_RENDERER_SMOKE_EXECUTABLE "SFGuestRendererSmoke")
 configure_file(
@@ -30,7 +31,8 @@ target_link_libraries(sf_ios_guest_renderer_smoke PRIVATE
     sf::psycross_backend
     SDL2::SDL2
     "${SF_GUEST_SMOKE_FOUNDATION_FRAMEWORK}"
-    "${SF_GUEST_SMOKE_UIKIT_FRAMEWORK}")
+    "${SF_GUEST_SMOKE_UIKIT_FRAMEWORK}"
+    "${SF_GUEST_SMOKE_GAMECONTROLLER_FRAMEWORK}")
 
 set_target_properties(sf_ios_guest_renderer_smoke PROPERTIES
     OUTPUT_NAME "${SF_IOS_GUEST_RENDERER_SMOKE_EXECUTABLE}"

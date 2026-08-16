@@ -1,5 +1,6 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
+#import <GameController/GameController.h>
 
 #include <OpenGLES/ES3/gl.h>
 #include <SDL2/SDL.h>
@@ -269,6 +270,22 @@ LoopPresentationCountArgument(int argc, char *argv[]) {
     }
   }
   return std::nullopt;
+}
+
+double SettleSecondsArgument(int argc, char *argv[], double fallback) {
+  for (int index = 1; index + 1 < argc; ++index) {
+    if (argv[index] &&
+        std::string_view{argv[index]} == "--sf-controller-settle-seconds" &&
+        argv[index + 1] && argv[index + 1][0] != '\0') {
+      char *end = nullptr;
+      const auto value = std::strtod(argv[index + 1], &end);
+      if (!end || *end != '\0' || value < 0.0 || value > 300.0) {
+        return fallback;
+      }
+      return value;
+    }
+  }
+  return fallback;
 }
 
 DiscSource ResolveDiscSource(int argc, char *argv[]) {
@@ -679,8 +696,8 @@ bool RunCoordinatedLoopSmoke(const DiscSource &source,
         options.yield_to_host = [] {
           @autoreleasepool {
             [[NSRunLoop currentRunLoop]
-                runMode:NSDefaultRunLoopMode
-             beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.002]];
+                runMode:NSRunLoopCommonModes
+             beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.005]];
           }
         };
         options.per_presentation =
@@ -754,16 +771,399 @@ bool RunCoordinatedLoopSmoke(const DiscSource &source,
       });
 }
 
+struct ControllerEvidenceState {
+  bool initialized{};
+  std::int32_t previous_instance{-1};
+  std::uint16_t previous_buttons{0xffffU};
+  std::array<std::uint8_t, 4U> previous_analog{128U, 128U, 128U, 128U};
+  double previous_move{};
+  double previous_turn{};
+  double previous_strafe{};
+  bool previous_aim{};
+  bool previous_fire{};
+  bool previous_interact{};
+  std::uint32_t presentation_count{};
+};
+
+bool RunCoordinatedControllerSmoke(const DiscSource &source,
+                                   std::uint32_t presentation_count,
+                                   double settle_seconds) {
+  return RunCoordinatedMission(
+      source, "controller-smoke",
+      [presentation_count,
+       settle_seconds](sf::game::MissionPackage &mission,
+                           const SmokeClock::time_point &renderStart,
+                           const SmokeClock::time_point &smokeStart) {
+        sf::platform::PsyCrossGuestLoopSmokeOptions options;
+        options.presentation_count = presentation_count;
+        options.yield_to_host = [] {
+          @autoreleasepool {
+            [[NSRunLoop currentRunLoop]
+                runMode:NSRunLoopCommonModes
+             beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.005]];
+          }
+        };
+        options.sample_controller = true;
+        const auto evidence = std::make_shared<ControllerEvidenceState>();
+        const auto log_app_state = [] {
+          const auto state = [UIApplication sharedApplication].applicationState;
+          const char *state_name =
+              state == UIApplicationStateActive
+                  ? "active"
+              : state == UIApplicationStateInactive
+                  ? "inactive"
+              : state == UIApplicationStateBackground ? "background"
+                                                      : "unknown";
+          NSUInteger foreground_scenes = 0U;
+          for (UIScene *scene in
+               [UIApplication sharedApplication].connectedScenes) {
+            if (scene.activationState ==
+                UISceneActivationStateForegroundActive) {
+              ++foreground_scenes;
+            }
+          }
+          EvidenceLog("app_state state=%s foreground_scenes=%lu", state_name,
+                      (unsigned long)foreground_scenes);
+        };
+        log_app_state();
+        // OS-level GameController diagnostics: SDL owns the production input
+        // path, but these logs prove whether the operating system itself
+        // enumerates the physical controller.
+        EvidenceLog("gc_controllers count=%lu",
+                    (unsigned long)[GCController controllers].count);
+        for (GCController *gc in [GCController controllers]) {
+          EvidenceLog(
+              "gc_controller name=%s category=%s current=%d attached=%d",
+              gc.vendorName.UTF8String ? gc.vendorName.UTF8String : "(null)",
+              gc.productCategory.UTF8String ? gc.productCategory.UTF8String
+                                            : "(null)",
+              gc == [GCController current] ? 1 : 0,
+              gc.isAttachedToDevice ? 1 : 0);
+        }
+        // Forum-documented failure mode: GameController can return an empty
+        // controller list when the app bundle carries no CFBundleIdentifier.
+        // Verify the runtime value rather than the on-disk plist.
+        {
+          NSString *runtime_bid = [[NSBundle mainBundle] bundleIdentifier];
+          NSString *plist_bid = (__bridge NSString *)
+              CFBundleGetValueForInfoDictionaryKey(CFBundleGetMainBundle(),
+                                                   kCFBundleIdentifierKey);
+          EvidenceLog("gc_runtime_bundle id=%s plist_id=%s",
+                      runtime_bid.UTF8String ? runtime_bid.UTF8String
+                                             : "(nil)",
+                      plist_bid.UTF8String ? plist_bid.UTF8String : "(nil)");
+        }
+        // Re-poll after a beat: wireless discovery can complete after launch.
+        for (double delay : {2.0, 5.0}) {
+          dispatch_after(
+              dispatch_time(DISPATCH_TIME_NOW,
+                            (int64_t)(delay * NSEC_PER_SEC)),
+              dispatch_get_main_queue(), ^{
+                EvidenceLog(
+                    "gc_repoll delay=%.0f count=%lu",
+                    delay,
+                    (unsigned long)[GCController controllers].count);
+              });
+        }
+        // Force wireless discovery and log what the system reports.
+        if ([GCController
+                respondsToSelector:
+                    @selector(
+                        startWirelessControllerDiscoveryWithCompletionHandler:)]) {
+          [GCController
+              startWirelessControllerDiscoveryWithCompletionHandler:^{
+                dispatch_async(dispatch_get_main_queue(), ^{
+                  EvidenceLog("gc_wireless_discovery_complete count=%lu",
+                              (unsigned long)[GCController controllers]
+                                  .count);
+                  for (GCController *gc in [GCController controllers]) {
+                    EvidenceLog(
+                        "gc_wireless name=%s category=%s",
+                        gc.vendorName.UTF8String
+                            ? gc.vendorName.UTF8String
+                            : "(null)",
+                        gc.productCategory.UTF8String
+                            ? gc.productCategory.UTF8String
+                            : "(null)");
+                  }
+                });
+              }];
+        }
+        __block id connect_token = [[NSNotificationCenter defaultCenter]
+            addObserverForName:GCControllerDidConnectNotification
+                        object:nil
+                         queue:[NSOperationQueue mainQueue]
+                    usingBlock:^(NSNotification *note) {
+                      GCController *gc = note.object;
+                      EvidenceLog(
+                          "gc_connect name=%s category=%s",
+                          gc.vendorName.UTF8String ? gc.vendorName.UTF8String
+                                                   : "(null)",
+                          gc.productCategory.UTF8String
+                              ? gc.productCategory.UTF8String
+                              : "(null)");
+                    }];
+        __block id disconnect_token = [[NSNotificationCenter defaultCenter]
+            addObserverForName:GCControllerDidDisconnectNotification
+                        object:nil
+                         queue:[NSOperationQueue mainQueue]
+                    usingBlock:^(NSNotification *note) {
+                      GCController *gc = note.object;
+                      EvidenceLog(
+                          "gc_disconnect name=%s",
+                          gc.vendorName.UTF8String ? gc.vendorName.UTF8String
+                                                   : "(null)");
+                    }];
+        // Settle phase: the manual continuous loop does not drain the GCD
+        // main queue, and SDL's iOS MFi driver receives controller connect
+        // notifications on the main queue. Idle the run loop BEFORE the loop
+        // starts so the asynchronous GameController discovery handshake
+        // completes and SDL/PsyX register the physical pad first.
+        EvidenceLog("gc_settle begin (wake the pad if asleep)");
+        NSDate *settle_deadline =
+            [NSDate dateWithTimeIntervalSinceNow:settle_seconds];
+        NSDate *next_settle_log = [NSDate date];
+        while ([GCController controllers].count == 0 &&
+               [settle_deadline timeIntervalSinceNow] > 0.0) {
+          [[NSRunLoop currentRunLoop]
+              runMode:NSRunLoopCommonModes
+           beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+          if ([next_settle_log timeIntervalSinceNow] <= 0.0) {
+            EvidenceLog("gc_settle waiting count=%lu state=%d",
+                        (unsigned long)[GCController controllers].count,
+                        static_cast<int>(
+                            [UIApplication sharedApplication].applicationState));
+            next_settle_log = [NSDate dateWithTimeIntervalSinceNow:1.0];
+          }
+        }
+        EvidenceLog("gc_settle end count=%lu",
+                    (unsigned long)[GCController controllers].count);
+        for (GCController *gc in [GCController controllers]) {
+          EvidenceLog(
+              "gc_settle name=%s category=%s attached=%d",
+              gc.vendorName.UTF8String ? gc.vendorName.UTF8String : "(null)",
+              gc.productCategory.UTF8String ? gc.productCategory.UTF8String
+                                            : "(null)",
+              gc.isAttachedToDevice ? 1 : 0);
+        }
+        options.controller_observer =
+            [evidence](
+                const sf::platform::PsyCrossGuestControllerSample &sample) {
+              ++evidence->presentation_count;
+              if (evidence->presentation_count % 50U == 0U &&
+                  [GCController controllers].count == 0U) {
+                // Periodic discovery window: the continuous loop does not
+                // drain the GCD main queue, so give the run loop a real
+                // chance to deliver a mid-loop controller connect.
+                EvidenceLog("gc_window presentations=%u",
+                            evidence->presentation_count);
+                [[NSRunLoop currentRunLoop]
+                    runMode:NSRunLoopCommonModes
+                 beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.3]];
+              }
+              if (!evidence->initialized ||
+                  sample.instance_id != evidence->previous_instance) {
+                evidence->initialized = true;
+                evidence->previous_instance = sample.instance_id;
+                EvidenceLog(
+                    "controller_identity connected=%d name=%s type=%u "
+                    "instance=%d",
+                    sample.connected ? 1 : 0, sample.name.c_str(),
+                    sample.controller_type, sample.instance_id);
+              }
+              if (sample.buttons != evidence->previous_buttons) {
+                EvidenceLog(
+                    "controller_buttons buttons=0x%04x held=0x%04x",
+                    sample.buttons,
+                    static_cast<unsigned int>(~sample.buttons & 0xffffU));
+                evidence->previous_buttons = sample.buttons;
+              }
+              auto analog_changed = false;
+              for (std::size_t index = 0U; index < sample.analog.size();
+                   ++index) {
+                if (std::abs(static_cast<int>(sample.analog[index]) -
+                             static_cast<int>(
+                                 evidence->previous_analog[index])) >= 4) {
+                  analog_changed = true;
+                }
+              }
+              if (analog_changed) {
+                EvidenceLog("controller_analog lh=%u lv=%u rh=%u rv=%u",
+                            sample.analog[0], sample.analog[1],
+                            sample.analog[2], sample.analog[3]);
+                evidence->previous_analog = sample.analog;
+              }
+              if (sample.move != evidence->previous_move ||
+                  sample.turn != evidence->previous_turn ||
+                  sample.strafe != evidence->previous_strafe ||
+                  sample.aim != evidence->previous_aim ||
+                  sample.fire != evidence->previous_fire ||
+                  sample.interact != evidence->previous_interact) {
+                EvidenceLog(
+                    "controller_input move=%.3f turn=%.3f strafe=%.3f "
+                    "aim=%d fire=%d interact=%d",
+                    sample.move, sample.turn, sample.strafe,
+                    sample.aim ? 1 : 0, sample.fire ? 1 : 0,
+                    sample.interact ? 1 : 0);
+                EvidenceLog("guest_pose x=%.1f y=%.1f z=%.1f yaw=%d",
+                            sample.player_x, sample.player_y,
+                            sample.player_z, sample.player_yaw);
+                evidence->previous_move = sample.move;
+                evidence->previous_turn = sample.turn;
+                evidence->previous_strafe = sample.strafe;
+                evidence->previous_aim = sample.aim;
+                evidence->previous_fire = sample.fire;
+                evidence->previous_interact = sample.interact;
+              }
+              if (evidence->presentation_count % 100U == 0U) {
+                EvidenceLog(
+                    "controller_heartbeat presentations=%u connected=%d "
+                    "buttons=0x%04x pose=(%.1f,%.1f,%.1f) yaw=%d",
+                    evidence->presentation_count, sample.connected ? 1 : 0,
+                    sample.buttons, sample.player_x, sample.player_y,
+                    sample.player_z, sample.player_yaw);
+              }
+            };
+        options.lifecycle_event = [](bool background,
+                                     std::uint32_t presentation_index) {
+          EvidenceLog("lifecycle event=%s presentations=%u",
+                      background ? "background" : "foreground",
+                      presentation_index);
+        };
+        const auto result =
+            sf::platform::runPsyCrossGuestLoopSmoke(mission, options);
+        [[NSNotificationCenter defaultCenter] removeObserver:connect_token];
+        [[NSNotificationCenter defaultCenter] removeObserver:disconnect_token];
+        EvidenceLog(
+          "loop_result=%s status=%s presentations=%u guest_updates=%u "
+          "first=%llu:%llu last=%llu:%llu submitted=%zu rejected=%zu "
+          "first_ms=%.3f last_ms=%.3f interval_ms=%.3f:%.3f:%.3f "
+          "background=%u foreground=%u bg_after=%u background_ms=%.3f "
+          "terminated=%d fbo=%u read_fbo=%u fbo_status=0x%04x "
+          "viewport=%d,%d,%dx%d pixels=%zu opaque=%zu nonuniform=%zu "
+          "rgb_buckets=%u luminance=%u:%u gl_errors=0x%04x,0x%04x,0x%04x "
+          "render_ms=%.3f total_ms=%.3f",
+          result.passed() ? "PASS" : "FAIL",
+          LoopStatusName(result.status),
+          result.presentations_completed,
+          result.guest_updates_completed,
+          static_cast<unsigned long long>(result.first_sequence),
+          static_cast<unsigned long long>(result.first_guest_frame),
+          static_cast<unsigned long long>(result.last_sequence),
+          static_cast<unsigned long long>(result.last_guest_frame),
+          result.submitted_primitives,
+          result.rejected_primitives,
+          result.first_presentation_ms,
+          result.last_presentation_ms,
+          result.minimum_interval_ms,
+          result.maximum_interval_ms,
+          result.mean_interval_ms,
+          result.background_events,
+          result.foreground_events,
+          result.presentations_before_first_background,
+          result.total_background_ms,
+          result.terminated_by_os ? 1 : 0,
+          result.draw_framebuffer,
+          result.read_framebuffer,
+          result.framebuffer_status,
+          result.viewport_x,
+          result.viewport_y,
+          result.viewport_width,
+          result.viewport_height,
+          result.pixel_count,
+          result.opaque_pixel_count,
+          result.nonuniform_pixel_count,
+          result.unique_rgb_buckets,
+          result.minimum_luminance,
+          result.maximum_luminance,
+          result.renderer_gl_error,
+          result.readback_gl_error,
+          result.present_gl_error,
+          ElapsedMilliseconds(renderStart),
+          ElapsedMilliseconds(smokeStart));
+        return result.passed();
+      });
+}
+
+// Probe-only mode: idle the main run loop for 10 s with NO SDL video or
+// game code running, so GameController discovery/notification delivery is
+// the only thing the process does. Decisive for OS-level enumeration.
+int RunGameControllerProbe() {
+  @autoreleasepool {
+    NSString *runtime_bid = [[NSBundle mainBundle] bundleIdentifier];
+    EvidenceLog("gc_probe begin bundle=%s",
+                runtime_bid.UTF8String ? runtime_bid.UTF8String : "(nil)");
+    auto logControllers = [](const char *tag) {
+      NSArray<GCController *> *controllers = [GCController controllers];
+      EvidenceLog("gc_probe %s count=%lu", tag,
+                  (unsigned long)controllers.count);
+      for (GCController *gc in controllers) {
+        EvidenceLog(
+            "gc_probe %s name=%s category=%s attached=%d", tag,
+            gc.vendorName.UTF8String ? gc.vendorName.UTF8String : "(null)",
+            gc.productCategory.UTF8String ? gc.productCategory.UTF8String
+                                          : "(null)",
+            gc.isAttachedToDevice ? 1 : 0);
+      }
+    };
+    logControllers("initial");
+    __block id connect_token = [[NSNotificationCenter defaultCenter]
+        addObserverForName:GCControllerDidConnectNotification
+                    object:nil
+                     queue:[NSOperationQueue mainQueue]
+                usingBlock:^(NSNotification *note) {
+                  GCController *gc = note.object;
+                  EvidenceLog(
+                      "gc_probe connect name=%s category=%s",
+                      gc.vendorName.UTF8String ? gc.vendorName.UTF8String
+                                               : "(null)",
+                      gc.productCategory.UTF8String
+                          ? gc.productCategory.UTF8String
+                          : "(null)");
+                  logControllers("after-connect");
+                }];
+    __block id disconnect_token = [[NSNotificationCenter defaultCenter]
+        addObserverForName:GCControllerDidDisconnectNotification
+                    object:nil
+                     queue:[NSOperationQueue mainQueue]
+                usingBlock:^(NSNotification *note) {
+                  GCController *gc = note.object;
+                  EvidenceLog("gc_probe disconnect name=%s",
+                              gc.vendorName.UTF8String
+                                  ? gc.vendorName.UTF8String
+                                  : "(null)");
+                }];
+    [NSTimer scheduledTimerWithTimeInterval:0.5
+                                    repeats:YES
+                                      block:^(NSTimer *timer) {
+                                        logControllers("poll");
+                                      }];
+    [[NSRunLoop currentRunLoop]
+        runUntilDate:[NSDate dateWithTimeIntervalSinceNow:10.0]];
+    logControllers("final");
+    [[NSNotificationCenter defaultCenter] removeObserver:connect_token];
+    [[NSNotificationCenter defaultCenter] removeObserver:disconnect_token];
+    EvidenceLog("gc_probe end");
+    return 0;
+  }
+}
+
 } // namespace
 
 int main(int argc, char *argv[]) {
   @autoreleasepool {
+    if (HasArgument(argc, argv, "--sf-run-gc-probe")) {
+      return RunGameControllerProbe();
+    }
     const auto run_loop_smoke =
         HasArgument(argc, argv, "--sf-run-guest-loop-smoke");
+    auto run_controller_smoke =
+        HasArgument(argc, argv, "--sf-run-controller-smoke");
     if (!HasArgument(argc, argv, "--sf-run-guest-render-smoke") &&
-        !run_loop_smoke) {
-      EvidenceLog("result=IDLE reason=explicit-launch-argument-required");
-      return 0;
+        !run_loop_smoke && !run_controller_smoke) {
+      // Xcode-friendly default: a plain Run with no mode argument drives the
+      // physical-controller smoke so the pad path works out of the box.
+      run_controller_smoke = true;
     }
 
     EvidenceLog("launch result=BEGIN owner=SDL-UIScene");
@@ -771,9 +1171,13 @@ int main(int argc, char *argv[]) {
     try {
       source = ResolveDiscSource(argc, argv);
       std::optional<std::uint32_t> loop_presentations;
-      if (run_loop_smoke) {
+      if (run_loop_smoke || run_controller_smoke) {
         loop_presentations = LoopPresentationCountArgument(argc, argv);
-        if (!loop_presentations) {
+        const auto count_argument_present =
+            HasArgument(argc, argv, "--sf-loop-presentations");
+        if ((run_loop_smoke && !loop_presentations) ||
+            (run_controller_smoke && count_argument_present &&
+             !loop_presentations)) {
           EvidenceLog("result=FAIL stage=loop-options "
                       "reason=missing-or-invalid-presentation-count");
           if (source->securityScoped) {
@@ -781,11 +1185,20 @@ int main(int argc, char *argv[]) {
           }
           return 2;
         }
+        if (run_controller_smoke && !loop_presentations) {
+          loop_presentations =
+              sf::platform::PsyCrossGuestLoopSmokeOptions::
+                  default_presentation_count;
+        }
       }
-      const bool passed = run_loop_smoke
-                              ? RunCoordinatedLoopSmoke(
-                                    *source, *loop_presentations)
-                              : RunCoordinatedSmoke(*source);
+      const bool passed =
+          run_controller_smoke
+              ? RunCoordinatedControllerSmoke(
+                    *source, *loop_presentations,
+                    SettleSecondsArgument(argc, argv, 120.0))
+              : run_loop_smoke
+              ? RunCoordinatedLoopSmoke(*source, *loop_presentations)
+              : RunCoordinatedSmoke(*source);
       if (source->securityScoped) {
         [source->directoryURL stopAccessingSecurityScopedResource];
       }

@@ -4,12 +4,14 @@
 #include "sf/game/pause_menu.hpp"
 #include "sf/platform/host.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string>
 
 struct PADRAW;
 
@@ -65,6 +67,26 @@ struct SceneLoopPresentation {
   SceneFrameSubmission submission;
 };
 
+struct SceneControllerSample {
+  bool connected{};
+  std::int32_t instance_id{-1};
+  std::uint8_t controller_type{};
+  std::string name;
+  // Active-low PADRAW button bitmask: a zero bit means the button is held.
+  std::uint16_t buttons{0xffffU};
+  std::array<std::uint8_t, 4U> analog{128U, 128U, 128U, 128U};
+  double move{};
+  double turn{};
+  double strafe{};
+  bool aim{};
+  bool fire{};
+  bool interact{};
+  double player_x{};
+  double player_y{};
+  double player_z{};
+  int player_yaw{};
+};
+
 struct SceneViewerContinuousGuestLoopOptions {
   std::uint32_t presentation_count{};
   double update_interval_seconds{1.0 / 20.0};
@@ -79,6 +101,13 @@ struct SceneViewerContinuousGuestLoopOptions {
   // completed presentations when the transition was observed.
   std::function<void(bool background, std::uint32_t presentation_index)>
       lifecycle_event;
+  // When true, each guest update samples the physical SDL game controller
+  // through PsyX/PADRAW and feeds the mapped portable input into the guest.
+  // The pad must be registered (PadInitDirect) before the loop runs.
+  bool sample_controller{};
+  // Invoked once per presentation when sample_controller is enabled, after
+  // the guest update, with the raw pad state, mapped input and guest pose.
+  std::function<void(const SceneControllerSample &)> controller_observer;
 };
 
 struct SceneViewerRunOptions {
