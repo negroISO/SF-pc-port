@@ -97,13 +97,13 @@ int			g_ALEffectsSupported = 0;
 
 #ifndef __EMSCRIPTEN__
 
-LPALGENEFFECTS alGenEffects = NULL;
-LPALDELETEEFFECTS alDeleteEffects = NULL;
-LPALEFFECTI alEffecti = NULL;
-LPALEFFECTF alEffectf = NULL;
-LPALGENAUXILIARYEFFECTSLOTS alGenAuxiliaryEffectSlots = NULL;
-LPALDELETEAUXILIARYEFFECTSLOTS alDeleteAuxiliaryEffectSlots = NULL;
-LPALAUXILIARYEFFECTSLOTI alAuxiliaryEffectSloti = NULL;
+static LPALGENEFFECTS s_alGenEffects = NULL;
+static LPALDELETEEFFECTS s_alDeleteEffects = NULL;
+static LPALEFFECTI s_alEffecti = NULL;
+static LPALEFFECTF s_alEffectf = NULL;
+static LPALGENAUXILIARYEFFECTSLOTS s_alGenAuxiliaryEffectSlots = NULL;
+static LPALDELETEAUXILIARYEFFECTSLOTS s_alDeleteAuxiliaryEffectSlots = NULL;
+static LPALAUXILIARYEFFECTSLOTI s_alAuxiliaryEffectSloti = NULL;
 
 #endif // __EMSCRIPTEN__
 
@@ -117,41 +117,41 @@ static void InitOpenAlEffects()
 		return;
 	}
 
-	alGenEffects = (LPALGENEFFECTS)alGetProcAddress("alGenEffects");
-	alDeleteEffects = (LPALDELETEEFFECTS)alGetProcAddress("alDeleteEffects");
-	alEffecti = (LPALEFFECTI)alGetProcAddress("alEffecti");
-	alEffectf = (LPALEFFECTF)alGetProcAddress("alEffectf");
-	alGenAuxiliaryEffectSlots = (LPALGENAUXILIARYEFFECTSLOTS)alGetProcAddress("alGenAuxiliaryEffectSlots");
-	alDeleteAuxiliaryEffectSlots = (LPALDELETEAUXILIARYEFFECTSLOTS)alGetProcAddress("alDeleteAuxiliaryEffectSlots");
-	alAuxiliaryEffectSloti = (LPALAUXILIARYEFFECTSLOTI)alGetProcAddress("alAuxiliaryEffectSloti");
+	s_alGenEffects = (LPALGENEFFECTS)alGetProcAddress("alGenEffects");
+	s_alDeleteEffects = (LPALDELETEEFFECTS)alGetProcAddress("alDeleteEffects");
+	s_alEffecti = (LPALEFFECTI)alGetProcAddress("alEffecti");
+	s_alEffectf = (LPALEFFECTF)alGetProcAddress("alEffectf");
+	s_alGenAuxiliaryEffectSlots = (LPALGENAUXILIARYEFFECTSLOTS)alGetProcAddress("alGenAuxiliaryEffectSlots");
+	s_alDeleteAuxiliaryEffectSlots = (LPALDELETEAUXILIARYEFFECTSLOTS)alGetProcAddress("alDeleteAuxiliaryEffectSlots");
+	s_alAuxiliaryEffectSloti = (LPALAUXILIARYEFFECTSLOTI)alGetProcAddress("alAuxiliaryEffectSloti");
 
 	int max_sends = 0;
 	alcGetIntegerv(g_ALCdevice, ALC_MAX_AUXILIARY_SENDS, 1, &max_sends);
 
 	// make reverb effect slot
 	g_currEffectSlotIdx = 0;
-	alGenAuxiliaryEffectSlots(1, g_ALEffectSlots);
+	s_alGenAuxiliaryEffectSlots(1, g_ALEffectSlots);
 
 	// make reverb effect
-	alGenEffects(1, &g_nAlReverbEffect);
-	alEffecti(g_nAlReverbEffect, AL_EFFECT_TYPE, AL_EFFECT_REVERB);
+	s_alGenEffects(1, &g_nAlReverbEffect);
+	s_alEffecti(g_nAlReverbEffect, AL_EFFECT_TYPE, AL_EFFECT_REVERB);
 
 	// setup defaults of effect
-	alEffectf(g_nAlReverbEffect, AL_REVERB_GAIN, 0.45f);
-	alEffectf(g_nAlReverbEffect, AL_REVERB_GAINHF, 0.25f);
-	alEffectf(g_nAlReverbEffect, AL_REVERB_DECAY_TIME, 2.0f);
-	alEffectf(g_nAlReverbEffect, AL_REVERB_DECAY_HFRATIO, 0.9f);
-	alEffectf(g_nAlReverbEffect, AL_REVERB_REFLECTIONS_DELAY, 0.08f);
-	alEffectf(g_nAlReverbEffect, AL_REVERB_REFLECTIONS_GAIN, 0.2f);
-	alEffectf(g_nAlReverbEffect, AL_REVERB_DIFFUSION, 0.9f);
-	alEffectf(g_nAlReverbEffect, AL_REVERB_DENSITY, 0.1f);
-	alEffectf(g_nAlReverbEffect, AL_REVERB_AIR_ABSORPTION_GAINHF, 0.1f);
+	s_alEffectf(g_nAlReverbEffect, AL_REVERB_GAIN, 0.45f);
+	s_alEffectf(g_nAlReverbEffect, AL_REVERB_GAINHF, 0.25f);
+	s_alEffectf(g_nAlReverbEffect, AL_REVERB_DECAY_TIME, 2.0f);
+	s_alEffectf(g_nAlReverbEffect, AL_REVERB_DECAY_HFRATIO, 0.9f);
+	s_alEffectf(g_nAlReverbEffect, AL_REVERB_REFLECTIONS_DELAY, 0.08f);
+	s_alEffectf(g_nAlReverbEffect, AL_REVERB_REFLECTIONS_GAIN, 0.2f);
+	s_alEffectf(g_nAlReverbEffect, AL_REVERB_DIFFUSION, 0.9f);
+	s_alEffectf(g_nAlReverbEffect, AL_REVERB_DENSITY, 0.1f);
+	s_alEffectf(g_nAlReverbEffect, AL_REVERB_AIR_ABSORPTION_GAINHF, 0.1f);
 
 	g_ALEffectsSupported = 1;
 
 	eprintf("PSX SPU effects are supported and initialized\n");
 
-	alAuxiliaryEffectSloti(g_ALEffectSlots[g_currEffectSlotIdx], AL_EFFECTSLOT_EFFECT, g_nAlReverbEffect);
+	s_alAuxiliaryEffectSloti(g_ALEffectSlots[g_currEffectSlotIdx], AL_EFFECTSLOT_EFFECT, g_nAlReverbEffect);
 #endif // __EMSCRIPTEN__
 }
 
@@ -280,9 +280,9 @@ void PsyX_SPUAL_ShutdownSound()
 
 	if (g_ALEffectsSupported)
 	{
-		alDeleteEffects(1, &g_nAlReverbEffect);
+		s_alDeleteEffects(1, &g_nAlReverbEffect);
 		g_ALEffectsSupported = AL_NONE;
-		alDeleteAuxiliaryEffectSlots(1, g_ALEffectSlots);
+		s_alDeleteAuxiliaryEffectSlots(1, g_ALEffectSlots);
 	}
 
 	alcDestroyContext(g_ALCcontext);
@@ -789,13 +789,13 @@ int PsyX_SPUAL_SetReverb(int on_off)
 	{
 		if (g_enableSPUReverb)
 		{
-			alAuxiliaryEffectSloti(g_ALEffectSlots[g_currEffectSlotIdx], AL_EFFECTSLOT_EFFECT, g_nAlReverbEffect);
+			s_alAuxiliaryEffectSloti(g_ALEffectSlots[g_currEffectSlotIdx], AL_EFFECTSLOT_EFFECT, g_nAlReverbEffect);
 		}
 		else
 		{
 			g_currEffectSlotIdx = 0;
-			alAuxiliaryEffectSloti(g_ALEffectSlots[0], AL_EFFECTSLOT_EFFECT, AL_EFFECT_NULL);
-			alAuxiliaryEffectSloti(g_ALEffectSlots[1], AL_EFFECTSLOT_EFFECT, AL_EFFECT_NULL);
+			s_alAuxiliaryEffectSloti(g_ALEffectSlots[0], AL_EFFECTSLOT_EFFECT, AL_EFFECT_NULL);
+			s_alAuxiliaryEffectSloti(g_ALEffectSlots[1], AL_EFFECTSLOT_EFFECT, AL_EFFECT_NULL);
 		}
 	}
 #endif // __EMSCRIPTEN__

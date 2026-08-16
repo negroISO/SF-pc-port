@@ -4,6 +4,10 @@
 #include "types.h"
 #include "PsyX/common/pgxp_defs.h"
 
+#if !defined(__cplusplus)
+#include <assert.h>
+#endif
+
 extern	int (*GPU_printf)(const char *fmt, ...);
 
 #define WAIT_TIME	0x800000
@@ -329,7 +333,7 @@ typedef struct _RECT16 {
 
 #if USE_EXTENDED_PRIM_POINTERS
 
-#if defined(_M_X64) || defined(__amd64__)
+#if UINTPTR_MAX > UINT32_MAX
 
 #define DECLARE_P_ADDR \
 		uintptr_t addr; \
@@ -347,7 +351,7 @@ typedef struct _RECT16 {
 
 #define P_LEN		2		// 2 longs
 
-#endif // _M_X64 || __amd64__
+#endif // 64-bit host pointers
 
 #define DECLARE_P_ADDR_PTAG DECLARE_P_ADDR
 

@@ -172,9 +172,9 @@ static PsyXPresentationViewport PsyX_GetPresentationViewport() {
 // 3840x2160 must remain a real 3840x2160 target even in original 4:3 mode.
 static PsyXPresentationViewport PsyX_GetRenderTargetExtent() {
   const int width =
-      g_cfg_renderWidth > 0 ? g_cfg_renderWidth : std::max(g_windowWidth, 1);
+      g_cfg_renderWidth > 0 ? g_cfg_renderWidth : std::max(g_drawableWidth, 1);
   const int height =
-      g_cfg_renderHeight > 0 ? g_cfg_renderHeight : std::max(g_windowHeight, 1);
+      g_cfg_renderHeight > 0 ? g_cfg_renderHeight : std::max(g_drawableHeight, 1);
   return PsyXPresentationViewport{0, 0, width, height};
 }
 
@@ -431,6 +431,9 @@ void PBO_Download(GrPBO *pbo) {
 GLuint g_glVertexArray[MAX_NUM_VERTEX_BUFFERS];
 GLuint g_glVertexBuffer[MAX_NUM_VERTEX_BUFFERS];
 int g_curVertexBuffer = 0;
+static SDL_GLContext g_glContext = NULL;
+static GLuint g_glWindowFramebuffer = 0;
+static GLuint g_glWindowRenderbuffer = 0;
 
 GLuint g_glBlitFramebuffer;
 GrPBO g_glFramebufferPBO;
@@ -483,6 +486,8 @@ static void PsyX_AllocateNativeDepthTexture(GLenum internalFormat, int width,
   glBindTexture(GL_TEXTURE_2D, 0);
 }
 
+#elif defined(RENDERER_OGLES) && OGLES_VERSION >= 3
+static GLenum g_nativeDepthInternalFormat = GL_DEPTH24_STENCIL8;
 #endif
 
 static GLuint PsyX_GetNativeDrawFramebuffer() {
@@ -527,6 +532,12 @@ static int PsyX_EnsureNativeFramebuffer() {
                         nativeViewport.h);
   glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT,
                             GL_RENDERBUFFER, g_glNativeStencilRenderbuffer);
+#elif defined(RENDERER_OGLES)
+  glBindRenderbuffer(GL_RENDERBUFFER, g_glNativeDepthRenderbuffer);
+  glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, nativeViewport.w,
+                        nativeViewport.h);
+  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
+                            GL_RENDERBUFFER, g_glNativeDepthRenderbuffer);
 #else
   PsyX_AllocateNativeDepthTexture(g_nativeDepthInternalFormat, nativeViewport.w,
                                   nativeViewport.h);
@@ -570,6 +581,7 @@ static int PsyX_EnsureNativeFramebuffer() {
                               GL_RENDERBUFFER,
                               g_glNativeMultisampleDepthRenderbuffer);
 
+#if defined(RENDERER_OGL)
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE &&
         g_nativeDepthInternalFormat == GL_DEPTH32F_STENCIL8) {
       // Depth blits require compatible source and destination formats. If
@@ -586,6 +598,7 @@ static int PsyX_EnsureNativeFramebuffer() {
                                        nativeViewport.h);
       eprintwarn("32F MSAA depth unavailable; using reversed D24S8\n");
     }
+#endif
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
       g_nativeFramebufferSamples = g_cfg_msaaSamples;
     } else {
@@ -638,7 +651,7 @@ static void PsyX_PresentNativeFramebuffer() {
   PsyX_ResolveNativeFramebuffer();
 
   glBindFramebuffer(GL_READ_FRAMEBUFFER, g_glNativeFramebuffer);
-  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_glWindowFramebuffer);
   glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
   glClear(GL_COLOR_BUFFER_BIT);
   glBlitFramebuffer(source.x, source.y, source.x + source.w,
@@ -646,7 +659,8 @@ static void PsyX_PresentNativeFramebuffer() {
                     viewport.x + viewport.w, viewport.y + viewport.h,
                     GL_COLOR_BUFFER_BIT, GL_NEAREST);
 
-  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  glBindFramebuffer(GL_FRAMEBUFFER, g_glWindowFramebuffer);
+  glBindRenderbuffer(GL_RENDERBUFFER, g_glWindowRenderbuffer);
   if (scissorEnabled)
     glEnable(GL_SCISSOR_TEST);
 }
@@ -656,6 +670,8 @@ static void PsyX_PresentNativeFramebuffer() {
 #if defined(RENDERER_OGL) || defined(RENDERER_OGLES)
 int GR_InitialiseGLContext(char *windowName, int fullscreen) {
   int windowFlags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE;
+
+  windowFlags |= SDL_WINDOW_ALLOW_HIGHDPI;
 
 #if defined(__ANDROID__)
   windowFlags |= SDL_WINDOW_FULLSCREEN;
@@ -694,7 +710,8 @@ int GR_InitialiseGLContext(char *windowName, int fullscreen) {
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
 
-  if (!SDL_GL_CreateContext(g_window)) {
+  g_glContext = SDL_GL_CreateContext(g_window);
+  if (!g_glContext) {
     eprinterr("Failed to initialise - OpenGL ES %d.x is not supported.\n",
               OGLES_VERSION);
     return 0;
@@ -712,7 +729,8 @@ int GR_InitialiseGLContext(char *windowName, int fullscreen) {
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, minor_version);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, profile);
 
-    if (SDL_GL_CreateContext(g_window))
+    g_glContext = SDL_GL_CreateContext(g_window);
+    if (g_glContext)
       break;
 
     minor_version--;
@@ -725,6 +743,18 @@ int GR_InitialiseGLContext(char *windowName, int fullscreen) {
     return 0;
   }
 #endif
+
+  if (SDL_GL_MakeCurrent(g_window, g_glContext) != 0) {
+    eprinterr("Failed to make the GL context current: %s\n", SDL_GetError());
+    return 0;
+  }
+
+  GLint framebuffer = 0;
+  GLint renderbuffer = 0;
+  glGetIntegerv(GL_FRAMEBUFFER_BINDING, &framebuffer);
+  glGetIntegerv(GL_RENDERBUFFER_BINDING, &renderbuffer);
+  g_glWindowFramebuffer = (GLuint)framebuffer;
+  g_glWindowRenderbuffer = (GLuint)renderbuffer;
 
   return 1;
 }
@@ -807,6 +837,7 @@ int GR_InitialiseRender(char *windowName, int width, int height,
     eprinterr("Failed to Intialise GL extensions\n");
     return 0;
   }
+  PsyX_UpdateDrawableSize();
 #endif
 
   return 1;
@@ -814,6 +845,12 @@ int GR_InitialiseRender(char *windowName, int width, int height,
 
 void GR_Shutdown() {
 #if USE_OPENGL
+  if (!g_glContext)
+    return;
+
+  if (g_window)
+    SDL_GL_MakeCurrent(g_window, g_glContext);
+
   PsyX_DestroySkybox();
   PsyX_DestroySMAA();
   PsyX_DestroyVolumetrics();
@@ -846,6 +883,11 @@ void GR_Shutdown() {
   GR_DestroyTexture(g_rgLutTexture);
   GR_DestroyTexture(g_fbTexture);
   GR_DestroyTexture(g_offscreenRTTexture);
+
+  SDL_GL_DeleteContext(g_glContext);
+  g_glContext = NULL;
+  g_glWindowFramebuffer = 0;
+  g_glWindowRenderbuffer = 0;
 #endif
 }
 
@@ -1911,7 +1953,7 @@ int GR_InitialisePSX() {
       glFramebufferTexture2D(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT,
                              GL_TEXTURE_2D, 0, 0);
 
-      glBindFramebuffer(GL_FRAMEBUFFER, 0);
+      glBindFramebuffer(GL_FRAMEBUFFER, g_glWindowFramebuffer);
     }
   }
 
@@ -1946,7 +1988,7 @@ int GR_InitialisePSX() {
       glFramebufferTexture2D(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT,
                              GL_TEXTURE_2D, 0, 0);
 
-      glBindFramebuffer(GL_FRAMEBUFFER, 0);
+      glBindFramebuffer(GL_FRAMEBUFFER, g_glWindowFramebuffer);
     }
   }
 
@@ -1984,7 +2026,7 @@ int GR_InitialisePSX() {
       glFramebufferTexture2D(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT,
                              GL_TEXTURE_2D, 0, 0);
 
-      glBindFramebuffer(GL_FRAMEBUFFER, 0);
+      glBindFramebuffer(GL_FRAMEBUFFER, g_glWindowFramebuffer);
     }
   }
 
@@ -2603,8 +2645,8 @@ void GR_SetOffscreenState(const RECT16 *offscreenRect, int enable) {
                         g_PreviousOffscreen.y, GL_COLOR_BUFFER_BIT, GL_NEAREST);
 
       // done, unbind
-      glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-      glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+      glBindFramebuffer(GL_READ_FRAMEBUFFER, g_glWindowFramebuffer);
+      glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_glWindowFramebuffer);
     }
 #endif
 
@@ -2677,8 +2719,8 @@ void GR_StoreFrameBuffer(int x, int y, int w, int h) {
                       GL_NEAREST);
 
     // done, unbind
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, g_glWindowFramebuffer);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_glWindowFramebuffer);
   }
 
   // after drawing

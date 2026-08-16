@@ -3,10 +3,17 @@
 
 #include "PsyX/PsyX_config.h"
 
+#if defined(__APPLE__)
+#   include <TargetConditionals.h>
+#endif
+
 /*
  * Platform specific emulator setup
  */
-#if (defined(_WIN32) || defined(__APPLE__) || defined(__linux__)) && !defined(__ANDROID__) && !defined(__EMSCRIPTEN__) && !defined(__RPI__)
+#if defined(__APPLE__) && TARGET_OS_IPHONE && !TARGET_OS_MACCATALYST
+#   define RENDERER_OGLES
+#   define OGLES_VERSION (3)
+#elif (defined(_WIN32) || defined(__APPLE__) || defined(__linux__)) && !defined(__ANDROID__) && !defined(__EMSCRIPTEN__) && !defined(__RPI__)
 #   define RENDERER_OGL
 #   define USE_GLAD
 #elif defined(__RPI__)
@@ -50,7 +57,10 @@
 #if defined(USE_GLAD)
 #   include "common/glad.h"
 #else
-#   ifdef __EMSCRIPTEN__
+#   if defined(__APPLE__) && TARGET_OS_IPHONE && !TARGET_OS_MACCATALYST
+#      include <OpenGLES/ES3/gl.h>
+#      include <OpenGLES/ES3/glext.h>
+#   elif defined(__EMSCRIPTEN__)
 #      include <GL/gl.h>
 #   else
 #      if OGLES_VERSION == 2
@@ -62,7 +72,9 @@
 #   endif
 #endif
 
+#if !(defined(__APPLE__) && TARGET_OS_IPHONE && !TARGET_OS_MACCATALYST)
 #   include <EGL/egl.h>
+#endif
 
 #endif
 
@@ -102,8 +114,13 @@
 #	define VRAM_FORMAT            GL_RG
 #	define VRAM_INTERNAL_FORMAT   GL_RG32F
 #elif defined(RENDERER_OGLES)
+#   if OGLES_VERSION >= 3
+#	define VRAM_FORMAT            GL_RG
+#	define VRAM_INTERNAL_FORMAT   GL_RG8
+#   else
 #	define VRAM_FORMAT            GL_LUMINANCE_ALPHA
 #	define VRAM_INTERNAL_FORMAT   GL_LUMINANCE_ALPHA
+#   endif
 #endif
 
 #define LUT_WIDTH 		(256)

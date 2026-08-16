@@ -10,7 +10,7 @@
 //-----------------------------------------------------------------------
 
 #if defined(__APPLE__)
-#   include <SDL2/SDL.h>
+#   include <SDL.h>
 #elif defined(__EMSCRIPTEN__)
 #   include <emscripten/emscripten.h>
 #   include <emscripten/html5.h>

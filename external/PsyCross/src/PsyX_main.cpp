@@ -1187,10 +1187,11 @@ void PsyX_Shutdown()
 
 	PsyX_Pad_ShutdownSystem();
 
+	// Release GL resources while SDL still owns a current window/context.
+	GR_Shutdown();
 	SDL_DestroyWindow(g_window);
 	g_window = NULL;
 
-	GR_Shutdown();
 	SDL_Quit();
 
 	UnInstallExceptionHandler();

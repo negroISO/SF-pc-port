@@ -1,6 +1,8 @@
 #ifndef LIBAPI_H
 #define LIBAPI_H
 
+struct EXEC;
+
 #ifndef KERNEL_H
 #include "kernel.h"
 #endif
