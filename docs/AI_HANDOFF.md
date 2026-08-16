@@ -2,7 +2,7 @@
 
 ## Updated
 
-2026-08-15 23:52 CDT
+2026-08-16 00:00 CDT
 
 ## Workspace
 
@@ -13,8 +13,9 @@ derived retail data, device/signing identifiers, credentials, or anything under
 `out/`/`tmp/`.
 
 The SDL-owned renderer milestone is committed and pushed as `c292495`. The
-full guest-renderer checkpoint remains isolated on the feature branch and must
-not merge to `ios-port` until its physical-device runtime smoke passes.
+full guest-renderer checkpoint is committed and pushed as `f348406`, remains
+isolated on the feature branch, and must not merge to `ios-port` until its
+physical-device runtime smoke passes.
 
 ## Current status
 
@@ -214,3 +215,4 @@ All evidence stays ignored on the external volume.
 - `e8c2803` — SDL2 iOS scene lifecycle backport
 - `1489d7d` — bounded iOS external-disc guest boot smoke
 - `c292495` — SDL-owned iOS renderer scene conversion
+- `f348406` — bounded iOS guest renderer smoke checkpoint; physical runtime pending
