@@ -21,8 +21,12 @@ BUILD_ROOT="$DEPS_ROOT/build"
 INSTALL_ROOT="$DEPS_ROOT/install"
 LOG_ROOT="$DEPS_ROOT/logs"
 SMOKE_ROOT="$DEPS_ROOT/smoke"
+PATCH_ROOT="$REPO_ROOT/deps/patches"
+SDL2_PATCH_VERSION=2.32.10
+SDL2_PATCH_FILE="$PATCH_ROOT/sdl2-$SDL2_PATCH_VERSION-ios-uiscene.patch"
+SDL2_PATCH_SHA256=d4a047bb8edc8852a46bd3b6584409d9badb568e372e440584bf30e9e2b32ea5
 DEPLOYMENT_TARGET=${SF_IOS_DEPLOYMENT_TARGET:-17.0}
-RECIPE_VERSION=1
+RECIPE_VERSION=2
 
 PLATFORM=all
 MODE=build
@@ -172,6 +176,7 @@ esac
 need_tool awk
 need_tool grep
 need_tool tar
+need_tool patch
 need_tool /usr/bin/shasum
 [ -f "$LOCK_FILE" ] || die "dependency lock is missing: $LOCK_FILE"
 
@@ -216,6 +221,17 @@ dep_field() {
     id=$1
     field=$2
     awk -F '|' -v id="$id" -v field="$field" '$1 == id { print $field; exit }' "$LOCK_ROWS"
+}
+
+verify_sdl2_patch() {
+    local version actual
+    version=$(dep_field sdl2 2)
+    [ "$version" = "$SDL2_PATCH_VERSION" ] ||
+        die "SDL2 patch targets $SDL2_PATCH_VERSION, but the lock pins $version"
+    [ -f "$SDL2_PATCH_FILE" ] || die "SDL2 patch is missing: $SDL2_PATCH_FILE"
+    actual=$(sha256_file "$SDL2_PATCH_FILE")
+    [ "$actual" = "$SDL2_PATCH_SHA256" ] ||
+        die "SDL2 patch SHA-256 mismatch: expected $SDL2_PATCH_SHA256, got $actual"
 }
 
 verify_archive() {
@@ -269,7 +285,7 @@ source_directory_name() {
 }
 
 extract_dependency() {
-    local id archive_name expected archive root_name source_dir stamp listing
+    local id archive_name expected archive root_name source_dir stamp listing source_key
     id=$1
     archive_name=$(dep_field "$id" 3)
     expected=$(dep_field "$id" 4)
@@ -277,9 +293,13 @@ extract_dependency() {
     root_name=$(source_directory_name "$id")
     source_dir="$SOURCE_ROOT/$root_name"
     stamp="$SOURCE_ROOT/.$root_name.sha256"
+    source_key=$expected
+    if [ "$id" = sdl2 ]; then
+        source_key="$expected|$SDL2_PATCH_SHA256"
+    fi
 
     if [ -d "$source_dir" ] && [ -f "$stamp" ] &&
-        [ "$(cat "$stamp")" = "$expected" ]; then
+        [ "$(cat "$stamp")" = "$source_key" ]; then
         return
     fi
 
@@ -302,7 +322,11 @@ extract_dependency() {
     printf '%s\n' "[extract $id] $source_dir"
     tar -xf "$archive" -C "$SOURCE_ROOT"
     [ -d "$source_dir" ] || die "$id archive did not create $source_dir"
-    printf '%s\n' "$expected" >"$stamp"
+    if [ "$id" = sdl2 ]; then
+        run_logged_in_dir "SDL2 UIKit patch" "$LOG_ROOT/source/sdl2-patch.log" \
+            "$source_dir" patch --batch --forward -p1 -i "$SDL2_PATCH_FILE"
+    fi
+    printf '%s\n' "$source_key" >"$stamp"
 }
 
 if [ -z "$JOBS" ]; then
@@ -314,7 +338,9 @@ esac
 [ "$JOBS" -gt 0 ] || die "jobs must be greater than zero"
 
 validate_lock
+verify_sdl2_patch
 echo "Dependency lock valid: $LOCK_FILE"
+echo "SDL2 UIKit patch verified: $SDL2_PATCH_FILE"
 
 if [ "$MODE" = verify ]; then
     for id in sdl2 openal-soft ffmpeg; do
@@ -587,6 +613,13 @@ validate_and_link() {
     rm -f -- "$archive_members"
 
     symbols="$TMPDIR/sf1-ios-deps-symbols.$$.txt"
+    xcrun nm -gU "$prefix/lib/libSDL2.a" >"$symbols"
+    grep -q '_SDL_UIKitRunApp$' "$symbols" ||
+        die "SDL2 UIKit run-loop symbol missing for $platform"
+    grep -q '_OBJC_CLASS_\$_SDLUIKitSceneDelegate$' "$symbols" ||
+        die "SDL2 UIKit scene delegate class missing for $platform"
+    grep -q '_UIKit_GetInterfaceOrientation$' "$symbols" ||
+        die "SDL2 UIKit scene orientation symbol missing for $platform"
     xcrun nm -gU "$prefix/lib/libavcodec.a" >"$symbols"
     grep -q '_ff_mdec_decoder$' "$symbols" || die "MDEC symbol missing for $platform"
     grep -q '_ff_adpcm_xa_decoder$' "$symbols" || die "ADPCM_XA symbol missing for $platform"
@@ -649,7 +682,7 @@ build_platform() {
     script_sha=$(sha256_file "$SCRIPT_DIR/build-ios-deps.sh")
     xcode_version=$(xcodebuild -version | tr '\n' ' ')
     key=$(printf '%s\n' \
-        "$RECIPE_VERSION|$manifest_sha|$script_sha|$platform|$sdkversion|$DEPLOYMENT_TARGET|$xcode_version" |
+        "$RECIPE_VERSION|$manifest_sha|$script_sha|$SDL2_PATCH_SHA256|$platform|$sdkversion|$DEPLOYMENT_TARGET|$xcode_version" |
         sha256_text)
 
     platform_build="$BUILD_ROOT/$platform"
