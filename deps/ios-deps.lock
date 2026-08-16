@@ -1,0 +1,11 @@
+# SF1 iOS dependency source lock, schema 1.
+#
+# Fields: id|version|archive|sha256|official_source_url
+# SHA-256 values are lowercase and are verified before extraction. SDL's value
+# also matches the digest published by the official GitHub release API. OpenAL
+# Soft and FFmpeg do not publish SHA-256 sidecars; their pinned values were
+# calculated from the official HTTPS release archives linked below. FFmpeg also
+# publishes a detached signature beside its archive.
+sdl2|2.32.10|SDL2-2.32.10.tar.gz|5f5993c530f084535c65a6879e9b26ad441169b3e25d789d83287040a9ca5165|https://github.com/libsdl-org/SDL/releases/download/release-2.32.10/SDL2-2.32.10.tar.gz
+openal-soft|1.25.2|openal-soft-1.25.2.tar.bz2|1dbaac44e7579d5bc8847ca8db4b2e8b9fd3961041f35ee20def4958301e1089|https://openal-soft.org/openal-releases/openal-soft-1.25.2.tar.bz2
+ffmpeg|8.1.2|ffmpeg-8.1.2.tar.xz|464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c|https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz
