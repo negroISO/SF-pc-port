@@ -301,3 +301,4 @@ All evidence stays ignored on the external volume.
 - `c292495` — SDL-owned iOS renderer scene conversion
 - `f348406` — bounded iOS guest renderer smoke checkpoint; physical runtime pending
 - `900009c` — advance gameplay presentation clock; physical guest render PASS
+- `519c9ce` — fix LP64 VRAM texture packing; clean physical raster PASS
