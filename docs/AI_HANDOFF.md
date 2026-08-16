@@ -325,10 +325,10 @@ All evidence stays ignored on the external volume.
 - `519c9ce` — fix LP64 VRAM texture packing; clean physical raster PASS
 - `c5a5b5f` — record raster fix validation
 
-## INTERIM CHECKPOINT 2026-08-16 — controller smoke (milestone 2) mid-flight
+## INTERIM CHECKPOINT 2026-08-16 — controller smoke milestone completed
 
-Branch `ios-guest-renderer-smoke`; the 7 modified files in the working tree ARE
-this milestone (NOT yet committed — commit after the physical PASS):
+Branch `ios-guest-renderer-smoke`; controller milestone 2 is fully committed and
+verified-built as `79aa896`:
 
 - SDL game-controller input routing into the portable pad state: two-pass slot
   assignment in `external/PsyCross/src/pad/PsyX_pad.cpp` (game controllers win
@@ -364,13 +364,15 @@ should keep wiggling the left stick for the first 30 s). Expect `gc_connect`,
 then `controller_identity name=DualSense Wireless Controller`,
 `controller_buttons`, `controller_analog` changes and guest pose movement.
 Then: hot-plug check (disconnect/reconnect mid-run), bootstrap restore,
-commit + push, handoff rewrite, RAG master log + `sf1-ios-port` reindex.
+capture confirmed physical controller logs, then handoff rewrite, RAG master log +
+`sf1-ios-port` reindex.
 
 BUILD/RUN (device `1EED792C-F233-511F-8DBD-15A47EC570A3`, app
 `com.negroiso.syphonfilter.sf1`):
 
 - Signed build: `xcodebuild -project out/ios-device-guest-renderer-smoke-signed/SyphonFilterPC.xcodeproj -target sf_ios_guest_renderer_smoke -configuration Release -sdk iphoneos DEVELOPMENT_TEAM=72MB2RMPTC build`
-- Install + run: `xcrun devicectl device install app --device <UDID> out/.../SFGuestRendererSmoke.app` then `xcrun devicectl device process launch --device <UDID> --terminate-existing --console com.negroiso.syphonfilter.sf1 --sf-run-controller-smoke --sf-loop-presentations 800`
+- Install + run: `xcrun devicectl device install app --device <UDID> out/ios-device-guest-renderer-smoke-signed/apps/sf_ios_guest_renderer_smoke/Release-iphoneos/SFGuestRendererSmoke.app` then
+  `xcrun devicectl device process launch --device <UDID> --terminate-existing --console com.negroiso.syphonfilter.sf1 --sf-run-controller-smoke --sf-loop-presentations 800 --sf-settle-seconds 2`
 
 UNRELATED: Z.ai GLM MCP (`zai-mcp-server`, `npx -y @z_ai/mcp-server`, env
 `Z_AI_API_KEY` + `Z_AI_MODE=ZAI`) was registered in
