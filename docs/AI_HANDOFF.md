@@ -372,7 +372,14 @@ BUILD/RUN (device `1EED792C-F233-511F-8DBD-15A47EC570A3`, app
 
 - Signed build: `xcodebuild -project out/ios-device-guest-renderer-smoke-signed/SyphonFilterPC.xcodeproj -target sf_ios_guest_renderer_smoke -configuration Release -sdk iphoneos DEVELOPMENT_TEAM=72MB2RMPTC build`
 - Install + run: `xcrun devicectl device install app --device <UDID> out/ios-device-guest-renderer-smoke-signed/apps/sf_ios_guest_renderer_smoke/Release-iphoneos/SFGuestRendererSmoke.app` then
-  `xcrun devicectl device process launch --device <UDID> --terminate-existing --console com.negroiso.syphonfilter.sf1 --sf-run-controller-smoke --sf-loop-presentations 800 --sf-settle-seconds 2`
+  `xcrun devicectl device process launch --device <UDID> --terminate-existing --console com.negroiso.syphonfilter.sf1 --sf-run-controller-smoke --sf-loop-presentations 800 --sf-controller-settle-seconds 120`
+
+- Xcode: open `out/ios-device-guest-renderer-smoke-signed/SyphonFilterPC.xcodeproj`,
+  scheme `sf_ios_guest_renderer_smoke`, destination = iPhone. A bare Run needs
+  NO launch arguments: the app defaults to the controller smoke (30 s loop,
+  120 s settle that exits on connect). Note: devicectl launches while the
+  phone is locked run `app_state state=inactive` and are SIGKILLed ~15 s in —
+  Xcode launches are properly foreground (`app_state state=active`).
 
 UNRELATED: Z.ai GLM MCP (`zai-mcp-server`, `npx -y @z_ai/mcp-server`, env
 `Z_AI_API_KEY` + `Z_AI_MODE=ZAI`) was registered in
