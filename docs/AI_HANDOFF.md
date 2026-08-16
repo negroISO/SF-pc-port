@@ -11,9 +11,9 @@
 derived retail data, device/signing identifiers, credentials, or anything under
 `out/`/`tmp/`.
 
-Current public HEAD is `1489d7d`. The SPU stack fix, SDL2 scene backport, and
-bounded iOS external-disc boot action are independently reviewed, verified,
-committed, and pushed.
+The latest source milestone is `1489d7d`; handoff-only commits follow it. The
+SPU stack fix, SDL2 scene backport, and bounded iOS external-disc boot action
+are independently reviewed, verified, committed, and pushed.
 
 ## Current status
 
