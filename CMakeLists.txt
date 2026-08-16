@@ -14,9 +14,16 @@ option(SF_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" ON)
 option(SF_PARALLEL_COMPILE "Compile independent sources in parallel" ON)
 option(SF_ENABLE_RELEASE_IPO "Enable interprocedural optimization in Release builds" ON)
 option(SF_BUILD_IOS_SHELL "Build the native iOS bootstrap application" OFF)
-option(SF_IOS_CODE_SIGNING "Enable code signing for the iOS bootstrap application" OFF)
+option(SF_BUILD_IOS_RENDERER_SMOKE
+    "Build the ROM-free SDL2/PsyCross GLES iOS smoke application" OFF)
+option(SF_IOS_CODE_SIGNING "Enable code signing for iOS application targets" OFF)
 set(SF_IOS_BUNDLE_IDENTIFIER "com.syphonfilter.port" CACHE STRING
     "Bundle identifier for the iOS bootstrap application")
+set(SF_IOS_RENDERER_SMOKE_BUNDLE_IDENTIFIER
+    "com.syphonfilter.port.renderer-smoke" CACHE STRING
+    "Bundle identifier for the iOS renderer smoke application")
+set(SF_IOS_DEPS_PREFIX "" CACHE PATH
+    "Validated SDL2/OpenAL iOS dependency prefix used by renderer smoke")
 
 if(SF_ENABLE_RELEASE_IPO)
     include(CheckIPOSupported)
@@ -160,6 +167,47 @@ if(SF_BUILD_IOS_SHELL)
     endif()
     enable_language(OBJCXX)
     add_subdirectory(apps/sf_ios)
+endif()
+
+if(SF_BUILD_IOS_RENDERER_SMOKE)
+    if(NOT IOS)
+        message(FATAL_ERROR
+            "SF_BUILD_IOS_RENDERER_SMOKE requires an iOS toolchain")
+    endif()
+    if(SF_ENABLE_PSYCROSS)
+        message(FATAL_ERROR
+            "The isolated iOS renderer smoke cannot be combined with the full PsyCross backend")
+    endif()
+    if(NOT SF_IOS_DEPS_PREFIX)
+        message(FATAL_ERROR
+            "SF_BUILD_IOS_RENDERER_SMOKE requires SF_IOS_DEPS_PREFIX")
+    endif()
+
+    set(_sf_ios_sdl2_config
+        "${SF_IOS_DEPS_PREFIX}/lib/cmake/SDL2/SDL2Config.cmake")
+    set(_sf_ios_openal_config
+        "${SF_IOS_DEPS_PREFIX}/lib/cmake/OpenAL/OpenALConfig.cmake")
+    if(NOT EXISTS "${_sf_ios_sdl2_config}" OR
+       NOT EXISTS "${_sf_ios_openal_config}")
+        message(FATAL_ERROR
+            "SF_IOS_DEPS_PREFIX is missing the validated SDL2/OpenAL packages: ${SF_IOS_DEPS_PREFIX}")
+    endif()
+
+    enable_language(C)
+    enable_language(OBJCXX)
+    find_package(Threads REQUIRED)
+    set(SDL2_DIR "${SF_IOS_DEPS_PREFIX}/lib/cmake/SDL2")
+    set(OpenAL_DIR "${SF_IOS_DEPS_PREFIX}/lib/cmake/OpenAL")
+    find_package(SDL2 CONFIG REQUIRED)
+    find_package(OpenAL CONFIG REQUIRED)
+
+    add_subdirectory(
+        "${SF_PSYCROSS_ROOT}"
+        "${CMAKE_BINARY_DIR}/_deps/psycross-smoke")
+    add_subdirectory(apps/sf_ios_renderer_smoke)
+
+    unset(_sf_ios_sdl2_config)
+    unset(_sf_ios_openal_config)
 endif()
 
 add_executable(sf_tool

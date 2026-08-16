@@ -69,6 +69,30 @@
       "cacheVariables": {
         "CMAKE_OSX_SYSROOT": "iphonesimulator"
       }
+    },
+    {
+      "name": "ios-device-renderer-smoke",
+      "displayName": "iOS device arm64 / ROM-free PsyCross renderer smoke",
+      "inherits": "ios-base",
+      "binaryDir": "${sourceDir}/out/ios-device-renderer-smoke",
+      "cacheVariables": {
+        "CMAKE_OSX_SYSROOT": "iphoneos",
+        "SF_BUILD_IOS_SHELL": "OFF",
+        "SF_BUILD_IOS_RENDERER_SMOKE": "ON",
+        "SF_IOS_DEPS_PREFIX": "${sourceDir}/out/ios-deps/install/iphoneos"
+      }
+    },
+    {
+      "name": "ios-simulator-renderer-smoke",
+      "displayName": "iOS Simulator arm64 / ROM-free PsyCross renderer smoke",
+      "inherits": "ios-base",
+      "binaryDir": "${sourceDir}/out/ios-simulator-renderer-smoke",
+      "cacheVariables": {
+        "CMAKE_OSX_SYSROOT": "iphonesimulator",
+        "SF_BUILD_IOS_SHELL": "OFF",
+        "SF_BUILD_IOS_RENDERER_SMOKE": "ON",
+        "SF_IOS_DEPS_PREFIX": "${sourceDir}/out/ios-deps/install/iphonesimulator"
+      }
     }
   ],
   "buildPresets": [
@@ -129,6 +153,28 @@
       "configurePreset": "ios-simulator",
       "configuration": "Debug",
       "targets": ["sf_ios"],
+      "nativeToolOptions": [
+        "CLANG_MODULES_BUILD_SESSION_FILE=${sourceDir}/out/xcode-cache/ModuleCache.noindex/Session.modulevalidation",
+        "SDK_STAT_CACHE_ENABLE=NO"
+      ]
+    },
+    {
+      "name": "ios-device-renderer-smoke-release",
+      "displayName": "iOS device Release / ROM-free PsyCross renderer smoke",
+      "configurePreset": "ios-device-renderer-smoke",
+      "configuration": "Release",
+      "targets": ["sf_ios_renderer_smoke"],
+      "nativeToolOptions": [
+        "CLANG_MODULES_BUILD_SESSION_FILE=${sourceDir}/out/xcode-cache/ModuleCache.noindex/Session.modulevalidation",
+        "SDK_STAT_CACHE_ENABLE=NO"
+      ]
+    },
+    {
+      "name": "ios-simulator-renderer-smoke-release",
+      "displayName": "iOS Simulator Release / ROM-free PsyCross renderer smoke",
+      "configurePreset": "ios-simulator-renderer-smoke",
+      "configuration": "Release",
+      "targets": ["sf_ios_renderer_smoke"],
       "nativeToolOptions": [
         "CLANG_MODULES_BUILD_SESSION_FILE=${sourceDir}/out/xcode-cache/ModuleCache.noindex/Session.modulevalidation",
         "SDK_STAT_CACHE_ENABLE=NO"

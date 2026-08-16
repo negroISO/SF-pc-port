@@ -30,11 +30,24 @@ set(PSYCROSS_SRCS_CPP
 	src/PsyX_main.cpp
 )
 
+set(PSYCROSS_SRCS_OBJCXX)
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+	enable_language(OBJCXX)
+	list(APPEND PSYCROSS_SRCS_OBJCXX
+		src/platform/ios/PsyX_ios_window.mm
+	)
+endif()
+
 set_source_files_properties(${PSYCROSS_SRCS_C} PROPERTIES LANGUAGE C)
 set_source_files_properties(${PSYCROSS_SRCS_CPP} PROPERTIES LANGUAGE CXX)
+set_source_files_properties(${PSYCROSS_SRCS_OBJCXX} PROPERTIES LANGUAGE OBJCXX)
 #set_source_files_properties( "src/gte/PsyX_GTE.cpp" PROPERTIES LANGUAGE C)
 
-add_library(psycross_static STATIC ${PSYCROSS_SRCS_C} ${PSYCROSS_SRCS_CPP})
+add_library(psycross_static STATIC
+	${PSYCROSS_SRCS_C}
+	${PSYCROSS_SRCS_CPP}
+	${PSYCROSS_SRCS_OBJCXX}
+)
 set_target_properties(psycross_static PROPERTIES OUTPUT_NAME "psycross")
 target_include_directories(psycross_static PUBLIC "include" "include/psx")
 
@@ -70,7 +83,15 @@ endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
 	find_library(PSYCROSS_OPENGLES_FRAMEWORK OpenGLES REQUIRED)
-	target_link_libraries(psycross_static PUBLIC ${PSYCROSS_OPENGLES_FRAMEWORK})
+	find_library(PSYCROSS_UIKIT_FRAMEWORK UIKit REQUIRED)
+	target_compile_definitions(psycross_static PUBLIC PSYX_PLATFORM_IOS=1)
+	target_link_libraries(psycross_static PUBLIC
+		${PSYCROSS_OPENGLES_FRAMEWORK}
+		${PSYCROSS_UIKIT_FRAMEWORK}
+	)
+	target_compile_options(psycross_static PRIVATE
+		"$<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>"
+	)
 	# GLES is the intentional bring-up bridge; a native Metal backend remains the
 	# production path, so suppress Apple's per-call deprecation flood here only.
 	target_compile_definitions(psycross_static PRIVATE GLES_SILENCE_DEPRECATION)
