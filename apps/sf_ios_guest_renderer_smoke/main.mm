@@ -1148,6 +1148,60 @@ int RunGameControllerProbe() {
   }
 }
 
+bool WaitForPhysicalControllerPreflight(double settle_seconds) {
+  @autoreleasepool {
+    EvidenceLog("gc_preflight begin settle_seconds=%.3f", settle_seconds);
+    __block bool discovered = [GCController controllers].count != 0;
+    __block id connect_token = [[NSNotificationCenter defaultCenter]
+        addObserverForName:GCControllerDidConnectNotification
+                    object:nil
+                     queue:[NSOperationQueue mainQueue]
+                usingBlock:^(NSNotification *note) {
+                  GCController *gc = note.object;
+                  discovered = YES;
+                  EvidenceLog(
+                      "gc_preflight connect name=%s category=%s",
+                      gc.vendorName.UTF8String ? gc.vendorName.UTF8String
+                                               : "(null)",
+                      gc.productCategory.UTF8String
+                          ? gc.productCategory.UTF8String
+                          : "(null)");
+                }];
+    NSTimer *poll_timer = [NSTimer
+        timerWithTimeInterval:0.5
+                     repeats:YES
+                       block:^(NSTimer *timer) {
+                         (void)timer;
+                         discovered = [GCController controllers].count != 0;
+                         EvidenceLog("gc_preflight poll count=%lu",
+                                     (unsigned long)[GCController controllers]
+                                         .count);
+                       }];
+    [[NSRunLoop currentRunLoop] addTimer:poll_timer
+                                    forMode:NSRunLoopCommonModes];
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:settle_seconds];
+    while (!discovered && [deadline timeIntervalSinceNow] > 0.0) {
+      [[NSRunLoop currentRunLoop]
+          runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+    }
+    [poll_timer invalidate];
+    [[NSNotificationCenter defaultCenter] removeObserver:connect_token];
+    EvidenceLog("gc_preflight end count=%lu discovered=%d",
+                (unsigned long)[GCController controllers].count,
+                discovered ? 1 : 0);
+    for (GCController *gc in [GCController controllers]) {
+      EvidenceLog("gc_preflight name=%s category=%s attached=%d",
+                  gc.vendorName.UTF8String ? gc.vendorName.UTF8String
+                                           : "(null)",
+                  gc.productCategory.UTF8String
+                      ? gc.productCategory.UTF8String
+                      : "(null)",
+                  gc.isAttachedToDevice ? 1 : 0);
+    }
+    return discovered;
+  }
+}
+
 } // namespace
 
 int main(int argc, char *argv[]) {
@@ -1167,6 +1221,16 @@ int main(int argc, char *argv[]) {
     }
 
     EvidenceLog("launch result=BEGIN owner=SDL-UIScene");
+    if (run_controller_smoke) {
+      const bool controller_discovered = WaitForPhysicalControllerPreflight(
+          SettleSecondsArgument(argc, argv, 120.0));
+      if (!controller_discovered) {
+        EvidenceLog(
+            "result=FAIL stage=controller-preflight "
+            "reason=no-physical-controller");
+        return 2;
+      }
+    }
     std::optional<DiscSource> source;
     try {
       source = ResolveDiscSource(argc, argv);
