@@ -206,8 +206,11 @@ Spu::Spu()
 }
 
 void Spu::reset() noexcept {
-  *state_ = {};
-  state_->noise_level = 1U;
+  // Recreate the state directly in its heap allocation. Assigning `{}` here
+  // materializes the 512 KiB-plus aggregate as a temporary, which exhausts
+  // the smaller stacks used by iOS worker threads.
+  std::destroy_at(state_.get());
+  std::construct_at(state_.get());
   clearPcm();
 }
 

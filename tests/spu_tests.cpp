@@ -90,6 +90,42 @@ void keyOnVoiceZero(sf::psx::Spu &spu, std::uint16_t pitch = 0U) {
   require(spu.writeRegister(key_on_low, 1U), "Could not key on voice zero");
 }
 
+void testResetRestoresDefaultState() {
+  auto spu = std::make_unique<sf::psx::Spu>();
+  auto expected = std::make_unique<sf::psx::SpuState>();
+  constexpr std::array<std::uint8_t, 4U> default_cd_input_matrix{
+      0x80U, 0U, 0U, 0x80U};
+  const std::array input{sf::psx::SpuPcmFrame{12000, -8000}};
+
+  require(expected->cd_input_matrix == default_cd_input_matrix &&
+              expected->noise_level == 1U,
+          "SPU default-state fixture lost its non-zero initializers");
+  writeRamBytes(*spu, 0U, std::array{
+                               std::byte{0x11U}, std::byte{0x22U},
+                               std::byte{0x33U}, std::byte{0x44U},
+                           });
+  spu->setCdInputMixer({0U, 0x80U, 0x80U, 0U});
+  require(spu->pushCdAudio(input) == input.size(),
+          "SPU rejected reset-test CD input");
+  spu->mixFrames(1U);
+  require(spu->restorePcm(input, 17U),
+          "SPU rejected reset-test host PCM state");
+  spu->setDmaTransferBusy(true);
+  require(spu->state() != *expected && spu->queuedPcmFrames() != 0U &&
+              spu->droppedPcmFrames() == 17U,
+          "SPU reset-test setup did not perturb guest and host state");
+
+  spu->reset();
+
+  require(spu->state() == *expected,
+          "SPU reset did not restore its exact value-initialized state");
+  require(spu->state().cd_input_matrix == default_cd_input_matrix &&
+              spu->state().noise_level == 1U,
+          "SPU reset lost its non-zero default state");
+  require(spu->queuedPcmFrames() == 0U && spu->droppedPcmFrames() == 0U,
+          "SPU reset retained host PCM state");
+}
+
 void testRegisterAccess() {
   auto spu = std::make_unique<sf::psx::Spu>();
   std::uint16_t value = 0U;
@@ -671,6 +707,7 @@ void testVabSoundUsesRetailSampleAndSpuPath() {
 
 int main() {
   try {
+    testResetRestoresDefaultState();
     testRegisterAccess();
     testDmaTransfer();
     testIrqLatchAndClear();
