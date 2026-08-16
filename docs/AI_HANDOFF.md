@@ -268,11 +268,10 @@ All evidence stays ignored on the external volume.
 
 ## Not yet verified
 
-- Touch controls, saves, mission progression, or pause/resume of the full
-  gameplay flow (the continuous guest loop itself is validated; it runs with
-  empty pad state).
-- Real USB-C/Bluetooth Xbox, DualShock 4, DualSense, or other MFi controller
-  through SDL2's final gameplay path.
+- Touch controls, saves, full mission progression, or pause/resume of the full
+  gameplay flow.
+- Controllers other than the tested Bluetooth DualSense, USB-C wired mode, and
+  decisive power-off/reconnect hot-plug behavior.
 - Audio, XA playback, FMV video, interruptions, route changes, or audible output.
 - A Metal gameplay renderer. The current ROM-free renderer uses deprecated
   OpenGL ES/PsyCross as a bring-up bridge.
@@ -283,9 +282,10 @@ All evidence stays ignored on the external volume.
 ## Known limitations
 
 - The boot smoke advances one guest host update; the renderer smokes advance
-  with empty pad state up to a visibility threshold. The continuous guest
-  loop is bounded by a presentation count and does not sample input, audio,
-  movies or gameplay flow, so none of these are a playable port yet.
+  with empty pad state up to a visibility threshold. The continuous guest loop
+  is bounded by a presentation count and now proves physical DualSense input,
+  but it does not complete a full mission or exercise audio, movies, saves, or
+  full lifecycle behavior.
 - The tracked SDL patch targets a single fullscreen application scene. Custom
   `UIApplicationMain` hosts must use SDL's wrapper or forward/dedupe callbacks;
   external display and multi-scene routing remain unsupported.
@@ -299,8 +299,8 @@ All evidence stays ignored on the external volume.
 
 ## Next steps
 
-1. Route SDL game-controller input into the portable pad state, then physically
-   smoke Xbox/PlayStation/MFi USB-C and Bluetooth controllers.
+1. Capture a decisive DualSense power-off/reconnect hot-plug trace, then test
+   USB-C and other Xbox/PlayStation/MFi controller models.
 2. Recopy the legal disc pair to Simulator Documents/Ps1 only if Simulator
    retail parity is needed; the retained staging directory is currently empty.
 3. Profile continuous execution. Start with the R3000 interpreter step/pump hot
@@ -324,63 +324,71 @@ All evidence stays ignored on the external volume.
 - `900009c` — advance gameplay presentation clock; physical guest render PASS
 - `519c9ce` — fix LP64 VRAM texture packing; clean physical raster PASS
 - `c5a5b5f` — record raster fix validation
+- `d9b6f11` — preflight physical controllers before SDL init; DualSense input PASS
 
-## INTERIM CHECKPOINT 2026-08-16 — controller smoke milestone completed
+## FINAL CHECKPOINT 2026-08-16 — physical DualSense gameplay input PASS
 
-Branch `ios-guest-renderer-smoke`; controller milestone 2 is fully committed and
-verified-built as `79aa896`:
+Branch `ios-guest-renderer-smoke`; source fix is `d9b6f11` (*Preflight physical
+controllers before SDL init*). Evidence directory:
 
-- SDL game-controller input routing into the portable pad state: two-pass slot
-  assignment in `external/PsyCross/src/pad/PsyX_pad.cpp` (game controllers win
-  over the iOS accelerometer joystick), `SceneControllerSample` +
-  `sample_controller` in the viewer/runtime, `PsyCrossGuestControllerSample`
-  host bridge, `--sf-run-controller-smoke` in
-  `apps/sf_ios_guest_renderer_smoke/main.mm`.
-- Diagnostics added today (same file): `--sf-run-gc-probe` mode (pure idle
-  run loop, proves OS-level enumeration), `gc_runtime_bundle` (live
-  CFBundleIdentifier check), settle phase (15 s wait for async GameController
-  discovery before the loop), mid-loop `gc_window` discovery windows, and
-  NSRunLoopCommonModes yields. Rationale: the manual continuous loop does NOT
-  drain the GCD main queue (proven: dispatch_after re-polls only ran after the
-  loop ended), and SDL's iOS MFi driver receives controller connects on the
-  main queue.
+`tmp/validation/2026-08-16-controller-smoke-live/`
 
-KEY FINDINGS:
+Root cause and ordering fix:
 
-- App-side chain is CORRECT. The DualSense was observed twice via
-  `gc_probe`: `connect name=DualSense Wireless Controller category=DualSense`
-  within 0.5 s of launch. Runtime bundle id logs
-  `com.negroiso.syphonfilter.sf1` (forum "empty CFBundleIdentifier" failure
-  mode ruled out).
-- The blocker is the PAD'S SLEEP TIMER: every controller-smoke launch landed
-  in a sleep gap (15 s settle + full loop, zero connects); both probe launches
-  caught it awake and saw it instantly. Symptom: `gc_controllers count=0`,
-  `gc_settle waiting count=0`, no `gc_connect`, SDL lists only the iOS
+- The original controller smoke created the SDL/UIKit scene and GLES context,
+  then idled up to 120 s waiting for GameController discovery. In that state it
+  presented no frames and iOS stopped/killed it around 15–20 s.
+- A zero-settle control run survived and passed 800 presentations but sampled
+  only the iOS accelerometer; the sleeping DualSense did not appear through
+  mid-loop discovery windows.
+- The idle `--sf-run-gc-probe` connected the same DualSense in roughly 0.5 s.
+- `d9b6f11` therefore performs a GameController-only preflight before disc
+  access and PsyCross/SDL initialization. Controller smoke fails cleanly if no
+  physical controller appears. Once discovery succeeds, SDL initializes with
+  the DualSense already present and assigns it to slot 1 ahead of the
   accelerometer.
 
-NEXT ACTION: with the pad IN HAND and a button pressed to wake it, launch
-`--sf-run-controller-smoke --sf-loop-presentations 800` immediately (user
-should keep wiggling the left stick for the first 30 s). Expect `gc_connect`,
-then `controller_identity name=DualSense Wireless Controller`,
-`controller_buttons`, `controller_analog` changes and guest pose movement.
-Then: hot-plug check (disconnect/reconnect mid-run), bootstrap restore,
-capture confirmed physical controller logs, then handoff rewrite, RAG master log +
-`sf1-ios-port` reindex.
+Exact final-source physical run (`controller-smoke-final-minimal.txt`):
 
-BUILD/RUN (device `1EED792C-F233-511F-8DBD-15A47EC570A3`, app
-`com.negroiso.syphonfilter.sf1`):
+- foreground: `app_state state=active foreground_scenes=1`
+- OS discovery: `gc_preflight connect name=DualSense Wireless Controller`
+- SDL/PsyCross identity: `Input slot 1: GameController 'DualSense Wireless
+  Controller'` and `controller_identity connected=1 ... type=7 instance=1`
+- real analog and mapped input: changing sticks plus
+  `controller_input move/turn`
+- bounded interactive loop: `loop_result=PASS status=success
+  presentations=400 guest_updates=399`
+- mean presentation interval 50.531 ms; no OS termination; renderer, readback,
+  and present GL errors all zero.
 
-- Signed build: `xcodebuild -project out/ios-device-guest-renderer-smoke-signed/SyphonFilterPC.xcodeproj -target sf_ios_guest_renderer_smoke -configuration Release -sdk iphoneos DEVELOPMENT_TEAM=72MB2RMPTC build`
-- Install + run: `xcrun devicectl device install app --device <UDID> out/ios-device-guest-renderer-smoke-signed/apps/sf_ios_guest_renderer_smoke/Release-iphoneos/SFGuestRendererSmoke.app` then
-  `xcrun devicectl device process launch --device <UDID> --terminate-existing --console com.negroiso.syphonfilter.sf1 --sf-run-controller-smoke --sf-loop-presentations 800 --sf-controller-settle-seconds 120`
+Longer user-played run (`controller-smoke-hotplug.txt`):
 
-- Xcode: open `out/ios-device-guest-renderer-smoke-signed/SyphonFilterPC.xcodeproj`,
-  scheme `sf_ios_guest_renderer_smoke`, destination = iPhone. A bare Run needs
-  NO launch arguments: the app defaults to the controller smoke (30 s loop,
-  120 s settle that exits on connect). Note: devicectl launches while the
-  phone is locked run `app_state state=inactive` and are SIGKILLed ~15 s in —
-  Xcode launches are properly foreground (`app_state state=active`).
+- reached 1600/1600 presentations with PASS
+- buttons, analog sticks, aim, fire, interact, target lock, yaw, and large
+  guest pose/position changes were observed
+- two screenshots one second apart differ across the gameplay area, confirming
+  live presentation rather than a frozen framebuffer
+- the user recognized and played the opening portion of Mission 1
 
-UNRELATED: Z.ai GLM MCP (`zai-mcp-server`, `npx -y @z_ai/mcp-server`, env
-`Z_AI_API_KEY` + `Z_AI_MODE=ZAI`) was registered in
-`~/.reasonix/config.json` `mcpServers`; activates on next Reasonix launch.
+Builds and restoration:
+
+- signed iPhone arm64 Release build: PASS
+- arm64 Simulator Release build: PASS
+- final signed bootstrap reinstalled/relaunched and screenshot captured
+- final `SFGuestRendererSmoke-` crash delta: zero
+
+Not decisively verified:
+
+- true DualSense power-off/reconnect hot-plug with distinct disconnect/connect
+  instance IDs
+- USB-C wired mode, Xbox/DualShock/MFi controllers, touch controls, saves,
+  audio/XA, FMV, full mission completion/lifecycle, and production Metal
+
+Run pattern remains explicit on device:
+
+```sh
+xcrun devicectl device process launch --device <UDID> --terminate-existing --console com.negroiso.syphonfilter.sf1 --sf-run-controller-smoke --sf-loop-presentations 400 --sf-controller-settle-seconds 120
+```
+
+Wake/move the pad during preflight. The preflight exits immediately on
+connection, then SDL initialization and the input-sampling loop begin.
