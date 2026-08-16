@@ -52,10 +52,6 @@ __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 
 extern SDL_Window *g_window;
 
-#if defined(PSYX_PLATFORM_IOS)
-extern "C" int PsyX_iOS_AttachWindowToScene(SDL_Window *window);
-#endif
-
 #ifndef GL_TEXTURE_MAX_ANISOTROPY_EXT
 #define GL_TEXTURE_MAX_ANISOTROPY_EXT 0x84FE
 #endif
@@ -695,17 +691,6 @@ int GR_InitialiseGLContext(char *windowName, int fullscreen) {
     eprinterr("Failed to initialise SDL window!\n");
     return 0;
   }
-
-#if defined(PSYX_PLATFORM_IOS)
-  // UIScene is mandatory on current iOS. SDL2 2.32 creates a UIWindow but
-  // does not attach it to the active UIWindowScene, so bridge it before the
-  // EAGL drawable/context is created.
-  if (!PsyX_iOS_AttachWindowToScene(g_window)) {
-    eprinterr("Failed to attach SDL window to UIWindowScene: %s\n",
-              SDL_GetError());
-    return 0;
-  }
-#endif
 
 #if defined(RENDERER_OGLES)
 

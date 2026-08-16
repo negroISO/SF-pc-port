@@ -124,14 +124,6 @@ extern "C"
 	extern void PsyX_Initialise(char* windowName, int screenWidth, int screenHeight,
 								int fullscreen);
 
-#if defined(PSYX_PLATFORM_IOS)
-	/* Registers the active UIWindowScene before PsyX_Initialise creates SDL's
-	 * native window. The pointer is retained by the iOS bridge; pass NULL when
-	 * the scene disconnects to release it. UIKit types stay out of this public
-	 * C header intentionally. */
-	extern void PsyX_iOS_SetWindowScene(void* windowScene);
-#endif
-
 	/* Cleans all resources and closes open instances */
 	extern void PsyX_Shutdown(void);
 

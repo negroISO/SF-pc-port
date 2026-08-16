@@ -18,7 +18,7 @@ configure_file(
     @ONLY
 )
 
-add_executable(sf_ios_renderer_smoke MACOSX_BUNDLE main.mm)
+add_executable(sf_ios_renderer_smoke MACOSX_BUNDLE main.mm uikit_main.c)
 target_compile_features(sf_ios_renderer_smoke PRIVATE cxx_std_17)
 target_compile_definitions(sf_ios_renderer_smoke PRIVATE
     GLES_SILENCE_DEPRECATION

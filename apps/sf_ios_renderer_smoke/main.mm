@@ -1,7 +1,6 @@
 #import <UIKit/UIKit.h>
 
 #include <OpenGLES/ES3/gl.h>
-#define SDL_MAIN_HANDLED 1
 #include <SDL.h>
 #include <SDL_syswm.h>
 #include <SDL_system.h>
@@ -11,7 +10,6 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstdint>
-#include <cstring>
 #include <unistd.h>
 
 namespace {
@@ -204,6 +202,13 @@ bool ValidateKnownFrame() {
 
 void SDLCALL RenderFrame(void *) {
   ++g_state.frame;
+  if (g_state.frame == 1) {
+    // SDL_UIKitRunApp disables its temporary launch observer after SDL_main
+    // returns. Keep the normal SDL event pump active for the render callback.
+    SDL_iPhoneSetEventPump(SDL_TRUE);
+    EvidenceLog("SF_RENDER_SMOKE event_pump result=PASS owner=SDL-UIScene");
+  }
+
   if (!PsyX_BeginScene()) {
     SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                  "%s begin_scene result=FAIL frame=%llu", kLogPrefix,
@@ -279,14 +284,10 @@ void SDLCALL RenderFrame(void *) {
   }
 }
 
-bool InitialiseSmoke(UIWindowScene *windowScene, UIWindow **nativeWindowOut) {
-  SDL_SetMainReady();
-  SDL_iPhoneSetEventPump(SDL_TRUE);
-  PsyX_iOS_SetWindowScene((__bridge void *)windowScene);
-
+bool InitialiseSmoke() {
   SDL_LogSetAllPriority(SDL_LOG_PRIORITY_VERBOSE);
   SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "%s launch", kLogPrefix);
-  EvidenceLog("SF_RENDER_SMOKE launch lifecycle=UIScene");
+  EvidenceLog("SF_RENDER_SMOKE launch lifecycle=SDL-UIScene");
 
   const char *temporaryDirectory =
       [NSTemporaryDirectory() fileSystemRepresentation];
@@ -345,14 +346,15 @@ bool InitialiseSmoke(UIWindowScene *windowScene, UIWindow **nativeWindowOut) {
     return false;
   }
   UIWindow *nativeWindow = windowInfo.info.uikit.window;
-  if (nativeWindow.windowScene != windowScene) {
+  UIWindowScene *windowScene = nativeWindow.windowScene;
+  if (!windowScene) {
     SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                  "%s scene_attachment result=FAIL", kLogPrefix);
     return false;
   }
-  if (nativeWindowOut) {
-    *nativeWindowOut = nativeWindow;
-  }
+  SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+              "%s scene_attachment result=PASS owner=%s", kLogPrefix,
+              NSStringFromClass(windowScene.delegate.class).UTF8String);
 
   SDL_GL_GetDrawableSize(g_state.window, &g_state.renderWidth,
                          &g_state.renderHeight);
@@ -394,112 +396,46 @@ bool InitialiseSmoke(UIWindowScene *windowScene, UIWindow **nativeWindowOut) {
   }
 
   SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-              "%s setup result=PASS callback=scene-CADisplayLink", kLogPrefix);
-  EvidenceLog("SF_RENDER_SMOKE setup result=PASS callback=scene-CADisplayLink");
+              "%s setup result=PASS lifecycle=SDL-UIScene", kLogPrefix);
+  EvidenceLog("SF_RENDER_SMOKE setup result=PASS lifecycle=SDL-UIScene");
   return true;
+}
+
+void ShutdownSmoke() {
+  if (g_state.window) {
+    SDL_iPhoneSetAnimationCallback(g_state.window, 1, nullptr, nullptr);
+    PsyX_Shutdown();
+  } else {
+    SDL_Quit();
+  }
+  g_state = {};
 }
 
 } // namespace
 
-@interface SFRendererSmokeAppDelegate : UIResponder <UIApplicationDelegate>
-@end
-
-@interface SFRendererSmokeSceneDelegate : UIResponder <UIWindowSceneDelegate>
-@property(nonatomic, strong) UIWindow *window;
-@property(nonatomic, strong) CADisplayLink *displayLink;
-@end
-
-@implementation SFRendererSmokeAppDelegate
-
-- (BOOL)application:(UIApplication *)application
-    didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
-  (void)application;
-  (void)launchOptions;
-  EvidenceLog("SF_RENDER_SMOKE app_did_finish lifecycle=UIScene");
-  return YES;
-}
-
-- (UISceneConfiguration *)application:(UIApplication *)application
-    configurationForConnectingSceneSession:(UISceneSession *)session
-                                   options:(UISceneConnectionOptions *)options {
-  (void)application;
-  (void)options;
-  UISceneConfiguration *configuration = [[UISceneConfiguration alloc]
-      initWithName:@"Renderer Smoke"
-       sessionRole:session.role];
-  configuration.delegateClass = SFRendererSmokeSceneDelegate.class;
-  return configuration;
-}
-
-@end
-
-@implementation SFRendererSmokeSceneDelegate
-
-- (void)scene:(UIScene *)scene
-    willConnectToSession:(UISceneSession *)session
-                 options:(UISceneConnectionOptions *)connectionOptions {
-  (void)session;
-  (void)connectionOptions;
-  if (![scene isKindOfClass:UIWindowScene.class]) {
-    EvidenceLog("SF_RENDER_SMOKE scene_connect result=FAIL type");
-    return;
-  }
-
-  EvidenceLog("SF_RENDER_SMOKE scene_will_connect");
-  UIWindow *nativeWindow = nil;
-  if (!InitialiseSmoke((UIWindowScene *)scene, &nativeWindow)) {
-    EvidenceLog("SF_RENDER_SMOKE setup result=FAIL");
-    return;
-  }
-
-  self.window = nativeWindow;
-  self.displayLink =
-      [CADisplayLink displayLinkWithTarget:self selector:@selector(drawFrame:)];
-  self.displayLink.paused = YES;
-  [self.displayLink addToRunLoop:NSRunLoop.mainRunLoop
-                         forMode:NSRunLoopCommonModes];
-}
-
-- (void)drawFrame:(CADisplayLink *)displayLink {
-  (void)displayLink;
-  RenderFrame(nullptr);
-}
-
-- (void)sceneDidBecomeActive:(UIScene *)scene {
-  (void)scene;
-  self.displayLink.paused = NO;
-  SDL_iPhoneSetEventPump(SDL_TRUE);
-  EvidenceLog("SF_RENDER_SMOKE scene_active");
-}
-
-- (void)sceneWillResignActive:(UIScene *)scene {
-  (void)scene;
-  self.displayLink.paused = YES;
-  EvidenceLog("SF_RENDER_SMOKE scene_inactive");
-}
-
-- (void)sceneDidDisconnect:(UIScene *)scene {
-  (void)scene;
-  [self.displayLink invalidate];
-  self.displayLink = nil;
-  if (g_state.window) {
-    PsyX_Shutdown();
-    g_state = {};
-  }
-  PsyX_iOS_SetWindowScene(nullptr);
-  SDL_iPhoneSetEventPump(SDL_FALSE);
-  EvidenceLog("SF_RENDER_SMOKE scene_disconnected");
-}
-
-@end
-
-#ifdef main
-#undef main
-#endif
-
 int main(int argc, char *argv[]) {
   @autoreleasepool {
-    return UIApplicationMain(
-        argc, argv, nil, NSStringFromClass(SFRendererSmokeAppDelegate.class));
+    (void)argc;
+    (void)argv;
+    if (!InitialiseSmoke()) {
+      EvidenceLog("SF_RENDER_SMOKE setup result=FAIL");
+      ShutdownSmoke();
+      return 2;
+    }
+
+    if (SDL_iPhoneSetAnimationCallback(g_state.window, 1, RenderFrame,
+                                       nullptr) != 0) {
+      SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                   "%s animation_callback result=FAIL error=%s", kLogPrefix,
+                   SDL_GetError());
+      EvidenceLog("SF_RENDER_SMOKE animation_callback result=FAIL");
+      ShutdownSmoke();
+      return 3;
+    }
+
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                "%s animation_callback result=PASS owner=SDL", kLogPrefix);
+    EvidenceLog("SF_RENDER_SMOKE animation_callback result=PASS owner=SDL");
+    return 0;
   }
 }

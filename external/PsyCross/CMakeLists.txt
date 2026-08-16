@@ -30,23 +30,13 @@ set(PSYCROSS_SRCS_CPP
 	src/PsyX_main.cpp
 )
 
-set(PSYCROSS_SRCS_OBJCXX)
-if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
-	enable_language(OBJCXX)
-	list(APPEND PSYCROSS_SRCS_OBJCXX
-		src/platform/ios/PsyX_ios_window.mm
-	)
-endif()
-
 set_source_files_properties(${PSYCROSS_SRCS_C} PROPERTIES LANGUAGE C)
 set_source_files_properties(${PSYCROSS_SRCS_CPP} PROPERTIES LANGUAGE CXX)
-set_source_files_properties(${PSYCROSS_SRCS_OBJCXX} PROPERTIES LANGUAGE OBJCXX)
 #set_source_files_properties( "src/gte/PsyX_GTE.cpp" PROPERTIES LANGUAGE C)
 
 add_library(psycross_static STATIC
 	${PSYCROSS_SRCS_C}
 	${PSYCROSS_SRCS_CPP}
-	${PSYCROSS_SRCS_OBJCXX}
 )
 set_target_properties(psycross_static PROPERTIES OUTPUT_NAME "psycross")
 target_include_directories(psycross_static PUBLIC "include" "include/psx")
