@@ -60,6 +60,8 @@ if(SF_BUILD_TESTS)
         tests/legacy_presentation_bridge_tests.cpp LIBRARIES sf::game)
     sf_add_unit_test(sf_raw_sector_source_tests
         tests/raw_sector_source_tests.cpp LIBRARIES sf::disc)
+    sf_add_unit_test(sf_disc_folder_tests
+        tests/disc_folder_tests.cpp LIBRARIES sf::disc)
     sf_add_unit_test(sf_xa_decoder_tests tests/xa_decoder_tests.cpp
         LIBRARIES sf::psx)
     sf_add_unit_test(sf_spu_tests tests/spu_tests.cpp LIBRARIES sf::psx)

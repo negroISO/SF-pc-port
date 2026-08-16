@@ -8,6 +8,7 @@
 #include <optional>
 #include <regex>
 #include <string>
+#include <system_error>
 
 namespace sf::disc {
 namespace {
@@ -48,6 +49,17 @@ std::uint32_t DataTrack::userDataOffset() const noexcept {
 }
 
 CueSheet CueSheet::load(const std::filesystem::path& cue_path) {
+    constexpr std::uintmax_t maximum_cue_size = 1024U * 1024U;
+    std::error_code size_error;
+    const auto cue_size = std::filesystem::file_size(cue_path, size_error);
+    if (size_error) {
+        throw core::Error{core::ErrorCode::io, "Cannot inspect CUE file"};
+    }
+    if (cue_size > maximum_cue_size) {
+        throw core::Error{core::ErrorCode::unsupported,
+                          "CUE file exceeds the 1 MiB safety limit"};
+    }
+
     std::ifstream stream{cue_path};
     if (!stream) {
         throw core::Error{core::ErrorCode::io, "Cannot open CUE file: " + cue_path.string()};
@@ -68,7 +80,14 @@ CueSheet CueSheet::load(const std::filesystem::path& cue_path) {
             if (binary_path) {
                 throw core::Error{core::ErrorCode::unsupported, "Multi-file CUE sheets are not supported"};
             }
-            binary_path = cue_path.parent_path() / std::filesystem::path{match[1].str()};
+            const auto reference = std::filesystem::path{match[1].str()};
+            if (reference.empty() || reference.is_absolute() ||
+                reference.has_parent_path()) {
+                throw core::Error{
+                    core::ErrorCode::unsupported,
+                    "CUE track binary must be a filename beside the CUE"};
+            }
+            binary_path = cue_path.parent_path() / reference;
         } else if (std::regex_match(line, match, track_pattern)) {
             ++data_track_count;
             const auto track_mode = uppercase(match[2].str());
@@ -91,6 +110,24 @@ CueSheet CueSheet::load(const std::filesystem::path& cue_path) {
     }
     if (!std::filesystem::is_regular_file(*binary_path)) {
         throw core::Error{core::ErrorCode::not_found, "Track binary was not found: " + binary_path->string()};
+    }
+
+    // A case-insensitive host can otherwise accept a CUE that fails when the
+    // same folder is moved to a case-sensitive Files provider.
+    auto exact_filename_found = false;
+    std::error_code directory_error;
+    std::filesystem::directory_iterator iterator{cue_path.parent_path(),
+                                                  directory_error};
+    const std::filesystem::directory_iterator end;
+    while (!directory_error && iterator != end) {
+        exact_filename_found =
+            exact_filename_found ||
+            iterator->path().filename().native() == binary_path->filename().native();
+        iterator.increment(directory_error);
+    }
+    if (directory_error || !exact_filename_found) {
+        throw core::Error{core::ErrorCode::not_found,
+                          "CUE track binary filename does not match exactly"};
     }
 
     CueSheet result;

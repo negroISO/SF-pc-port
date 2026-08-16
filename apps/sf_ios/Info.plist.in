@@ -20,7 +20,24 @@
     <string>0.1.0</string>
     <key>CFBundleVersion</key>
     <string>1</string>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>CUE Sheet</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>com.syphonfilter.port.cue-sheet</string>
+            </array>
+        </dict>
+    </array>
     <key>LSRequiresIPhoneOS</key>
+    <true/>
+    <key>LSSupportsOpeningDocumentsInPlace</key>
     <true/>
     <key>UILaunchScreen</key>
     <dict/>
@@ -47,6 +64,28 @@
     </array>
     <key>UIRequiresFullScreen</key>
     <true/>
+    <key>UTImportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.plain-text</string>
+            </array>
+            <key>UTTypeDescription</key>
+            <string>CUE Sheet</string>
+            <key>UTTypeIdentifier</key>
+            <string>com.syphonfilter.port.cue-sheet</string>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>cue</string>
+                </array>
+                <key>public.mime-type</key>
+                <string>application/x-cue</string>
+            </dict>
+        </dict>
+    </array>
     <key>UISupportedInterfaceOrientations</key>
     <array>
         <string>UIInterfaceOrientationLandscapeLeft</string>

@@ -75,6 +75,7 @@ sf_set_project_warnings(sf_assets)
 
 add_library(sf_disc
     src/disc/cue_sheet.cpp
+    src/disc/disc_folder.cpp
     src/disc/iso9660.cpp
     src/disc/raw_sector_source.cpp
 )
